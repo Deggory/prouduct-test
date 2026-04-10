@@ -1,0 +1,267 @@
+# Interceptor Dashboard GUI (`interceptor_dashboard.py`)
+
+A professional **Python desktop dashboard** for controlling the ESP32 steering interceptor in real time.
+
+Built with **Tkinter + PyGame + PySerial**, this GUI provides:
+
+* joystick-based steering control
+* smooth slew-limited torque ramping
+* keyboard speed injection
+* live ADC telemetry
+* fault decoding
+* TX/RX packet monitoring
+* relay + override status
+
+---
+
+# Features
+
+* **Real-time joystick steering** using PyGame
+* **Soft-center deadzone filtering**
+* **Slew-rate limited steering transitions**
+* **Live speed adjustment** using keyboard
+* **Telemetry dashboard** from ESP32 serial
+* **Human-readable fault decoding**
+* **Relay ON/OFF status**
+* **TX/RX diagnostics counters**
+* Stable **50 Hz control loop**
+* Cross-platform: **Linux + Windows**
+
+---
+
+# Requirements
+
+Install dependencies:
+
+```bash
+pip install pyserial pygame
+```
+
+Install Tkinter if missing.
+
+### Ubuntu / Debian
+
+```bash
+sudo apt install python3-tk
+```
+
+---
+
+# Serial Configuration
+
+```python
+PORT = "/dev/ttyUSB0"
+BAUD = 115200
+```
+
+## Linux
+
+```text
+/dev/ttyUSB0
+```
+
+## Windows
+
+```text
+COM5
+```
+
+Update the port based on your ESP32 connection.
+
+---
+
+# Control Parameters
+
+| Parameter   | Value | Purpose                         |
+| ----------- | ----: | ------------------------------- |
+| `DEADZONE`  |  0.05 | Removes joystick center drift   |
+| `MAX_STEP`  |     8 | Smooth steering ramp per cycle  |
+| `MAX_STEER` |   300 | Maximum steering torque command |
+| `Loop`      | 50 Hz | Real-time command update        |
+
+---
+
+# Steering Control Logic
+
+Joystick axis `0` is used for steering.
+
+## Deadzone Filter
+
+Small joystick movements near center are ignored.
+
+```text
+abs(axis) < 0.05 → 0
+```
+
+This prevents unwanted steering drift.
+
+---
+
+## Slew Limiter
+
+Steering changes are ramped smoothly.
+
+```text
+max change = 8 per cycle
+```
+
+Benefits:
+
+* smooth torque rise
+* realistic steering inertia
+* reduced EPS faults
+* safer bench testing
+
+---
+
+# Speed Control
+
+Keyboard shortcuts:
+
+* `+` → increase speed by **10 km/h**
+* `-` → decrease speed by **10 km/h**
+
+The value is transmitted continuously with steering commands.
+
+---
+
+# Serial TX Protocol
+
+The GUI sends commands to ESP32 in CSV format.
+
+```text
+CMD,<steer>,<speed>
+```
+
+Example:
+
+```text
+CMD,120,60
+```
+
+Meaning:
+
+* steering = 120
+* speed = 60 km/h
+
+Transmission rate: **50 Hz**.
+
+---
+
+# Serial RX Telemetry
+
+Expected ESP32 response:
+
+```text
+TEL,<adc0>,<adc1>,<override>,<fault>,<counter>,<relay>
+```
+
+Example:
+
+```text
+TEL,2080,2016,0,0,7,1
+```
+
+---
+
+# Fault Decoder
+
+Numeric fault codes are automatically converted.
+
+| Code | Meaning      |
+| ---: | ------------ |
+|    0 | NO_FAULT     |
+|    1 | TIMEOUT      |
+|    2 | TIMEOUT_VSS  |
+|    3 | BAD_CHECKSUM |
+|    4 | SEND_FAIL    |
+|    5 | SENSOR       |
+|    6 | ADC_UNCONFIG |
+
+---
+
+# Dashboard Fields
+
+The GUI displays:
+
+* Steering command
+* Speed
+* ADC0
+* ADC1
+* Override flag
+* Fault status
+* Relay state
+* Rolling counter
+* TX count
+* RX count
+
+Ideal for:
+
+* steering bench testing
+* torque sensor validation
+* CAN telemetry debugging
+* EPS diagnostics
+
+---
+
+# Thread Architecture
+
+The GUI uses **two background threads**.
+
+## `send_loop()`
+
+Runs at **50 Hz**:
+
+1. read joystick
+2. apply deadzone
+3. apply slew limiter
+4. send serial command
+5. update TX dashboard
+
+## `rx_loop()`
+
+Runs continuously:
+
+1. read telemetry line
+2. parse CSV
+3. decode fault
+4. update dashboard
+5. increment RX counter
+
+This keeps the UI smooth and responsive.
+
+---
+
+# Run
+
+```bash
+python3 interceptor_dashboard.py
+```
+
+Steps:
+
+1. connect joystick
+2. connect ESP32 via USB
+3. run script
+4. steer with joystick
+5. adjust speed with keyboard
+6. monitor live telemetry
+
+---
+
+# Suggested Future Improvements
+
+* COM port auto-detect
+* live ADC graph plotting
+* CSV telemetry logger
+* dark mode UI
+* joystick reconnect recovery
+* smooth speed hold ramp
+* fault history panel
+* steering gain slider
+
+---
+
+# License
+
+MIT License
