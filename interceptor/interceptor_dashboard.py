@@ -11,7 +11,7 @@ import time
 # =========================================================
 BAUD = 115200
 SERIAL_WATCHDOG_MS = 200           # Timeout before emergency stop (ms)
-SERIAL_TIMEOUT = 0.1               # Serial read timeout (seconds) - increased from 0.05
+SERIAL_TIMEOUT = 0.1               # Serial read timeout (seconds)
 
 ESP32_KEYWORDS = [
     "CP210", "CH340", "USB Serial",
@@ -21,13 +21,14 @@ ESP32_KEYWORDS = [
 STEER_DEADZONE = 0.05
 THROTTLE_DEADZONE = 0.10
 
-MAX_STEER = 300
+# Updated to match ESP32's safe physical limit (from ADC headroom)
+MAX_STEER = 22                     # Was 300, now matches calibrated interceptor
 MAX_SPEED = 140.0
 
 ACCEL_RATE = 40.0                  # km/h per second at full throttle
 BRAKE_RATE = 60.0                  # km/h per second at full brake
 DRAG_RATE = 10.0                   # km/h per second coasting drag
-WATCHDOG_DRAG_MULTIPLIER = 2.0     # Extra drag when watchdog active (e.g., 2 = double)
+WATCHDOG_DRAG_MULTIPLIER = 2.0     # Extra drag when watchdog active
 
 MAX_STEP = 8                       # Steering slew limit per 20ms
 
@@ -124,18 +125,15 @@ def open_serial():
         current_port = None
         return False
 
-    # Already connected to the same port?
     if ser and ser.is_open and current_port == port:
         return True
 
-    # Close any existing connection
     try:
         if ser and ser.is_open:
             ser.close()
     except Exception:
         pass
 
-    # Open new connection
     try:
         ser = serial.Serial(port, BAUD, timeout=SERIAL_TIMEOUT)
         current_port = port
@@ -175,7 +173,7 @@ def update_speed(dt, throttle_axis):
 
     if dt <= 0:
         return
-    if dt > 0.1:          # Cap delta time to avoid large jumps
+    if dt > 0.1:
         dt = 0.1
 
     if abs(throttle_axis) < THROTTLE_DEADZONE:
@@ -189,6 +187,16 @@ def update_speed(dt, throttle_axis):
         speed_kph -= DRAG_RATE * dt
 
     speed_kph = max(0.0, min(MAX_SPEED, speed_kph))
+
+
+def send_calibration():
+    """Send 'CAL' command to ESP32 to start auto-calibration."""
+    if ser and ser.is_open:
+        try:
+            ser.write(b"CAL\n")
+            print("Calibration command sent to ESP32.")
+        except Exception as e:
+            print("Failed to send calibration command:", e)
 
 
 # =========================================================
@@ -207,8 +215,10 @@ def serial_reader():
             line = ser.readline().decode(errors="ignore").strip()
             if line.startswith("TEL,"):
                 data_queue.put(("TEL", line))
+            # Also print any calibration info from ESP32 to console
+            elif line.startswith("Calibration") or "center" in line.lower():
+                print(line)
         except Exception:
-            # Serial error - close and mark as dead
             try:
                 ser.close()
             except Exception:
@@ -225,7 +235,6 @@ def update_gui():
     """Process incoming telemetry and refresh labels."""
     global telemetry_rx
 
-    # Process all pending telemetry frames
     try:
         while True:
             cmd, value = data_queue.get_nowait()
@@ -248,7 +257,6 @@ def update_gui():
     except queue.Empty:
         pass
 
-    # Update status and other dynamic labels
     serial_status = current_port if current_port else "Searching ESP32"
     labels["status"].config(
         text=f"ESP32: {serial_status} | JS: {joystick_name}"
@@ -258,7 +266,7 @@ def update_gui():
     labels["speed"].config(text=f"Speed: {speed_kph:.1f} km/h")
     labels["throttle"].config(text=f"Throttle: {throttle_input:+.2f}")
 
-    root.after(50, update_gui)   # Refresh at 20 Hz
+    root.after(50, update_gui)
 
 
 # =========================================================
@@ -271,7 +279,6 @@ def send_command():
 
     now = time.monotonic()
 
-    # Initialise timestamps on first run
     if last_time is None:
         last_time = now
         last_serial_send = now
@@ -281,18 +288,14 @@ def send_command():
     dt = now - last_time
     last_time = now
 
-    # Check if serial communication is stalled
     watchdog_triggered = (now - last_serial_send) > (SERIAL_WATCHDOG_MS / 1000.0)
 
     if watchdog_triggered:
-        # Emergency stop: zero throttle, centre steering, extra drag
         throttle_input = 0.0
         current_steer = slew_limit(0, current_steer)
         update_speed(dt, 0.0)
-        # Apply extra drag when watchdog active
         speed_kph = max(0.0, speed_kph - DRAG_RATE * dt * WATCHDOG_DRAG_MULTIPLIER)
     else:
-        # Normal operation: read joystick (if available)
         if not detect_joystick():
             throttle_input = 0.0
             current_steer = slew_limit(0, current_steer)
@@ -300,7 +303,6 @@ def send_command():
         else:
             pygame.event.pump()
 
-            # Steering axis (clamped)
             steer_axis = js.get_axis(STEER_AXIS)
             steer_axis = clamp_axis(steer_axis)
             if abs(steer_axis) < STEER_DEADZONE:
@@ -308,7 +310,6 @@ def send_command():
             target_steer = int(steer_axis * MAX_STEER)
             current_steer = slew_limit(target_steer, current_steer)
 
-            # Throttle axis (clamped)
             throttle_axis = js.get_axis(THROTTLE_AXIS)
             throttle_axis = clamp_axis(throttle_axis)
             if THROTTLE_INVERT:
@@ -317,47 +318,44 @@ def send_command():
 
             update_speed(dt, throttle_axis)
 
-    # Always send a command (either normal or safety zeros) if serial is open
     if ser and ser.is_open:
         try:
             cmd = f"CMD,{current_steer},{int(round(speed_kph))}\n"
             ser.write(cmd.encode())
             telemetry_tx += 1
-            last_serial_send = now   # Reset watchdog timer on successful send
+            last_serial_send = now
         except Exception:
-            # Write failed – mark serial as dead
             ser = None
             current_port = None
 
-    root.after(20, send_command)   # 50 Hz
+    root.after(20, send_command)
 
 
 # =========================================================
-# KEYBOARD OVERRIDE (OPTIONAL)
+# KEYBOARD OVERRIDE
 # =========================================================
 def key_handler(event):
-    """Keyboard controls: '+'/'-' to adjust speed (for testing)."""
+    """Keyboard controls: '+'/'-' to adjust speed, 'c' to calibrate."""
     global speed_kph
     if event.keysym in ("plus", "equal"):
         speed_kph = min(MAX_SPEED, speed_kph + 5)
     elif event.keysym == "minus":
         speed_kph = max(0, speed_kph - 5)
+    elif event.keysym == "c":
+        send_calibration()
 
 
 # =========================================================
 # CLEAN SHUTDOWN
 # =========================================================
 def on_closing():
-    """Gracefully close serial port, quit pygame, destroy window."""
     global running
     running = False
-
     try:
         if ser and ser.is_open:
             ser.close()
     except Exception:
         pass
-
     pygame.quit()
     root.destroy()
 
@@ -367,7 +365,7 @@ def on_closing():
 # =========================================================
 root = tk.Tk()
 root.title("Interceptor Pro Dashboard - Final")
-root.geometry("620x760")
+root.geometry("620x800")  # Slightly taller for button
 root.protocol("WM_DELETE_WINDOW", on_closing)
 root.bind("<Key>", key_handler)
 
@@ -380,6 +378,25 @@ for key in [
     labels[key] = tk.Label(root, text=f"{key}: ---", font=("Arial", 18))
     labels[key].pack(pady=5)
 
+# Add a calibration button
+cal_button = tk.Button(
+    root,
+    text="Calibrate ESP32 (send CAL)",
+    command=send_calibration,
+    font=("Arial", 14),
+    bg="lightblue"
+)
+cal_button.pack(pady=10)
+
+# Instructions label
+info_label = tk.Label(
+    root,
+    text="Press 'C' key or click button to calibrate.\nKeep steering at zero during calibration.",
+    font=("Arial", 10),
+    fg="gray"
+)
+info_label.pack(pady=5)
+
 # Start background serial reader thread
 threading.Thread(target=serial_reader, daemon=True).start()
 
@@ -387,5 +404,4 @@ threading.Thread(target=serial_reader, daemon=True).start()
 root.after(100, update_gui)
 root.after(20, send_command)
 
-# Start Tkinter event loop
 root.mainloop()
