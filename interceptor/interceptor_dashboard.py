@@ -4,15 +4,25 @@ import pygame
 import threading
 import queue
 import time
+import math
 
 # ========== CONFIGURATION ==========
 PORT = "/dev/ttyUSB0"   # Change to COM5 on Windows
 BAUD = 115200
 
-DEADZONE = 0.05
-MAX_STEP = 8
+# Joystick thresholds
+STEER_DEADZONE = 0.05
+THROTTLE_DEADZONE = 0.10
 MAX_STEER = 300
-MAX_SPEED = 655      # km/h (ESP32 limit)
+MAX_SPEED = 140.0      # km/h (new limit)
+
+# Acceleration / drag simulation constants (km/h per second)
+ACCEL_RATE = 40.0      # Full throttle acceleration
+BRAKE_RATE = 60.0      # Full brake deceleration
+DRAG_RATE = 10.0       # Coasting drag when throttle neutral
+
+# Slew limiting for steering (unchanged)
+MAX_STEP = 8
 
 FAULTS = {
     0: "NO_FAULT",
@@ -25,11 +35,13 @@ FAULTS = {
 }
 
 # ========== GLOBAL STATE ==========
-speed_kph = 0
+speed_kph = 0.0
 current_steer = 0
 running = True
 telemetry_tx = 0
 telemetry_rx = 0
+last_time = None          # For delta time calculation
+throttle_input = 0.0      # -1 (full brake) .. +1 (full throttle)
 
 # Queue for passing data from serial thread to GUI
 data_queue = queue.Queue()
@@ -45,6 +57,8 @@ if pygame.joystick.get_count() == 0:
     exit(1)
 js = pygame.joystick.Joystick(0)
 js.init()
+print(f"Joystick: {js.get_name()}")
+print(f"Number of axes: {js.get_numaxes()}")
 
 
 # ========== HELPER FUNCTIONS ==========
@@ -67,6 +81,37 @@ def open_serial():
         return False
 
 
+# ========== SPEED SIMULATION ==========
+def update_speed(dt, throttle_axis):
+    """
+    Update global speed_kph based on throttle axis and drag.
+    throttle_axis: -1 (full brake) .. +1 (full throttle)
+    """
+    global speed_kph
+    if dt <= 0 or dt > 0.1:
+        return
+
+    # Apply deadzone
+    if abs(throttle_axis) < THROTTLE_DEADZONE:
+        throttle_axis = 0.0
+
+    # Separate throttle (positive) and brake (negative)
+    if throttle_axis > 0:
+        # Acceleration
+        accel_force = throttle_axis * ACCEL_RATE * dt
+        speed_kph += accel_force
+    elif throttle_axis < 0:
+        # Braking
+        brake_force = abs(throttle_axis) * BRAKE_RATE * dt
+        speed_kph -= brake_force
+    else:
+        # Coasting drag
+        speed_kph -= DRAG_RATE * dt
+
+    # Clamp speed
+    speed_kph = max(0.0, min(MAX_SPEED, speed_kph))
+
+
 # ========== SERIAL READER THREAD ==========
 def serial_reader():
     """Continuously read lines from serial and push them into a queue."""
@@ -80,7 +125,6 @@ def serial_reader():
             if line.startswith("TEL,"):
                 data_queue.put(("TEL", line))
         except Exception:
-            # Serial error – try to reopen later
             ser = None
             time.sleep(0.5)
 
@@ -93,7 +137,6 @@ def update_gui():
         while True:
             cmd, value = data_queue.get_nowait()
             if cmd == "TEL":
-                # Parse telemetry line
                 parts = value.split(",")
                 if len(parts) == 7:
                     _, adc0, adc1, override, fault, counter, relay = parts
@@ -107,60 +150,77 @@ def update_gui():
                     labels["counter"].config(text=f"Counter: {counter}")
                     labels["rx"].config(text=f"RX: {telemetry_rx}")
             elif cmd == "STATUS":
-                # Update connection status
                 labels["status"].config(text=f"Status: {value}")
     except queue.Empty:
         pass
 
-    # Update TX counter and other values that change outside telemetry
+    # Update TX counter, steering, speed, and throttle display
     labels["tx"].config(text=f"TX: {telemetry_tx}")
     labels["steer"].config(text=f"Steer: {current_steer}")
-    labels["speed"].config(text=f"Speed: {speed_kph} km/h")
+    labels["speed"].config(text=f"Speed: {speed_kph:.1f} km/h")
+    labels["throttle"].config(text=f"Throttle: {throttle_input:+.2f}")
 
-    # Check serial connection periodically
+    # Check serial connection
     if ser is None or not ser.is_open:
         if open_serial():
             data_queue.put(("STATUS", "Connected"))
         else:
             data_queue.put(("STATUS", "Disconnected"))
 
-    root.after(50, update_gui)  # Update GUI at ~20 Hz (fast enough)
+    root.after(50, update_gui)  # 20 Hz GUI refresh
 
 
 def send_command():
-    """Send CMD frame to ESP32 at 50 Hz."""
-    global telemetry_tx, current_steer, speed_kph, ser
+    """Send CMD frame to ESP32 at 50 Hz, with speed simulation."""
+    global telemetry_tx, current_steer, speed_kph, ser, last_time, throttle_input
+    now = time.monotonic()
+    if last_time is None:
+        last_time = now
+        root.after(20, send_command)
+        return
+
+    dt = now - last_time
+    last_time = now
+
+    # Read joystick axes
+    pygame.event.pump()
+    # Steering: axis 0 (left/right)
+    steer_axis = js.get_axis(0)
+    if abs(steer_axis) < STEER_DEADZONE:
+        steer_axis = 0
+    target_steer = int(steer_axis * MAX_STEER)
+    current_steer = slew_limit(target_steer, current_steer)
+
+    # Throttle / brake: axis 1 (up/down) - up = negative, down = positive
+    # Invert so that up (negative) gives positive throttle (acceleration)
+    throttle_axis = -js.get_axis(1)   # Now up = +1 throttle, down = -1 brake
+    throttle_input = throttle_axis    # Store for display
+
+    # Update speed with simulation
+    update_speed(dt, throttle_axis)
+
+    # Send command if serial is open
     if ser and ser.is_open:
         try:
-            # Read joystick (non-blocking)
-            pygame.event.pump()
-            axis = js.get_axis(0)
-            if abs(axis) < DEADZONE:
-                axis = 0
-            target = int(axis * MAX_STEER)
-            current_steer = slew_limit(target, current_steer)
-
-            # Build command
-            cmd = f"CMD,{current_steer},{speed_kph}\n"
+            # Speed value sent to ESP32 must be integer (0..655)
+            speed_int = int(round(speed_kph))
+            cmd = f"CMD,{current_steer},{speed_int}\n"
             ser.write(cmd.encode())
             telemetry_tx += 1
-
-            # Update labels (via queue to avoid direct calls from timer)
             data_queue.put(("STATUS", "Sending"))
         except Exception:
-            # Write error – mark serial as dead
             ser = None
-    # Schedule next send
+
     root.after(20, send_command)  # 50 Hz
 
 
 def key_handler(event):
+    """Optional keyboard override for debugging (still works)."""
     global speed_kph
     if event.keysym in ("plus", "equal"):
-        speed_kph = min(MAX_SPEED, speed_kph + 10)
+        speed_kph = min(MAX_SPEED, speed_kph + 5)
     elif event.keysym == "minus":
-        speed_kph = max(0, speed_kph - 10)
-    # Label will be updated in update_gui
+        speed_kph = max(0, speed_kph - 5)
 
 
 def on_closing():
@@ -174,17 +234,17 @@ def on_closing():
 
 # ========== BUILD GUI ==========
 root = tk.Tk()
-root.title("Interceptor Pro Dashboard")
-root.geometry("520x700")
+root.title("Interceptor Pro Dashboard - Speed Simulation")
+root.geometry("560x750")
 root.protocol("WM_DELETE_WINDOW", on_closing)
 
 labels = {}
-for key in ["status", "steer", "speed", "adc0", "adc1",
+for key in ["status", "steer", "speed", "throttle", "adc0", "adc1",
             "override", "fault", "relay", "counter", "tx", "rx"]:
     labels[key] = tk.Label(root, text=f"{key}: ---", font=("Arial", 18))
     labels[key].pack(pady=5)
 
-# Bind keyboard
+# Bind keyboard (optional)
 root.bind("<Key>", key_handler)
 
 # Start serial reader thread
@@ -193,7 +253,7 @@ threading.Thread(target=serial_reader, daemon=True).start()
 # Start GUI periodic updates
 root.after(100, update_gui)
 
-# Start command sender (runs in main thread via after())
+# Start command sender (main thread via after)
 root.after(20, send_command)
 
 # Run main loop
