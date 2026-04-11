@@ -1,77 +1,106 @@
 /*
  * ESP32 + MCP2515 CAN Bus Interceptor
- * - Sends torque command (ID 0x220) and speed command (ID 0x76)
- * - Receives telemetry (ID 0x221)
- * - Includes CAN recovery and error LED feedback
+ * Final Safe Firmware with Serial Watchdog
+ * 
+ * Pair with Python GUI that sends "CMD,steer,speed" at 50 Hz.
+ * 
+ * Hardware:
+ *   MCP2515 CS  -> GPIO5
+ *   SCK         -> GPIO18
+ *   MISO        -> GPIO19
+ *   MOSI        -> GPIO23
+ *   Error LED   -> GPIO2 (active high)
+ * 
+ * CAN bitrate: 500 kbps, assuming 8 MHz crystal on MCP2515.
+ *              If your module uses 16 MHz, change MCP_8MHZ to MCP_16MHZ.
  */
 
 #include <SPI.h>
 #include <mcp2515.h>
-#include <stdlib.h>   // for abs() and constrain()
+#include <stdlib.h>
 
-// ========== ESP32 VSPI Pin Definitions ==========
-#define MCP_CS   5   // Chip Select for MCP2515
-#define MCP_SCK  18  // SPI Clock
-#define MCP_MISO 19  // Master In Slave Out
-#define MCP_MOSI 23  // Master Out Slave In
+// =========================================================
+// PIN DEFINITIONS
+// =========================================================
+#define MCP_CS   5
+#define MCP_SCK  18
+#define MCP_MISO 19
+#define MCP_MOSI 23
+#define LED_ERR  2
 
-// ========== Error LED Pin ==========
-#define LED_ERR  2   // Built-in LED on many ESP32 boards (active high)
+// =========================================================
+// WATCHDOG CONFIGURATION
+// =========================================================
+const unsigned long CMD_TIMEOUT_MS = 200;   // Zero outputs if no command for 200ms
 
-// ========== CAN Object ==========
+// =========================================================
+// MCP2515 OBJECT
+// =========================================================
 MCP2515 mcp2515(MCP_CS);
 
-// ========== CAN Frames ==========
+// =========================================================
+// CAN FRAMES
+// =========================================================
 struct can_frame txMsg;   // Transmit buffer
 struct can_frame rxMsg;   // Receive buffer
 
-// ========== Command Values ==========
-int steer = 0;            // Steering torque (-2048..2047)
-int speed = 0;            // Speed command (0..655, will be multiplied by 100)
+// =========================================================
+// CONTROL STATE
+// =========================================================
+int steer = 0;      // Steering torque (-2048..2047)
+int speed = 0;      // Speed command (0..655, will be *100 before sending)
 
-// ========== Counters & Status ==========
-uint8_t counter = 0;           // Rolling counter (0..15) for CAN messages
-uint32_t tx_count = 0;         // Successful sends
-uint32_t rx_count = 0;         // Received telemetry frames
-uint8_t send_fail_count = 0;   // Consecutive send failures
-bool led_state = false;        // Current LED state (for blinking)
-unsigned long last_blink = 0;  // Last time LED toggled
+// =========================================================
+// STATUS & TELEMETRY
+// =========================================================
+uint8_t counter = 0;          // Rolling counter (0..15) for CAN frames
+uint32_t tx_count = 0;        // Successful CAN sends
+uint32_t rx_count = 0;        // Received telemetry frames
+uint8_t send_fail_count = 0;  // Consecutive send failures
 
-// ========== Function Prototypes ==========
+bool led_state = false;
+unsigned long last_blink = 0;
+unsigned long last_cmd_time = 0;
+
+// =========================================================
+// FUNCTION DECLARATIONS
+// =========================================================
 void canRecover();
 void sendTorque();
 void sendSpeed();
 void readTelemetry();
 void updateErrorLed();
 
-// ------------------------------------------------------------------
-// CAN Recovery: Reset MCP2515, reinit bitrate, set normal mode
-// ------------------------------------------------------------------
+// =========================================================
+// MCP2515 RECOVERY (reset and reconfigure)
+// =========================================================
 void canRecover() {
-  mcp2515.reset();                         // Hardware reset
-  delay(10);                               // Wait for reset to complete
-  mcp2515.setBitrate(CAN_500KBPS, MCP_8MHZ); // Configure 500 kbps, 8 MHz crystal
-  mcp2515.setNormalMode();                 // Enter normal operation mode
-  send_fail_count = 0;                     // Reset failure counter after recovery
+  mcp2515.reset();
+  delay(10);
+  // CRITICAL: Set correct crystal frequency (8MHz or 16MHz)
+  // Change MCP_8MHZ to MCP_16MHZ if your module has a 16 MHz crystal.
+  mcp2515.setBitrate(CAN_500KBPS, MCP_8MHZ);
+  mcp2515.setNormalMode();
+  send_fail_count = 0;   // Reset failure counter after recovery
 }
 
-// ------------------------------------------------------------------
-// Send Torque Command (CAN ID 0x220)
-// Data format: center-based steering (2048 ± steer), plus enable + counter
-// ------------------------------------------------------------------
+// =========================================================
+// SEND TORQUE COMMAND (CAN ID 0x220)
+// Data format: center-based steering (2048 ± steer), enable bit + counter
+// =========================================================
 void sendTorque() {
-  // Clamp steering value to safe range (prevents overflow of 12-bit ADC)
+  // Clamp steering to safe 12-bit range (prevents overflow)
   int clamped_steer = constrain(steer, -2048, 2047);
-  uint16_t center = 2048;
-  uint16_t ch0 = center + clamped_steer;   // Channel 0 (right)
-  uint16_t ch1 = center - clamped_steer;   // Channel 1 (left)
 
-  // Prepare CAN frame
+  uint16_t center = 2048;
+  uint16_t ch0 = center + clamped_steer;   // Right channel
+  uint16_t ch1 = center - clamped_steer;   // Left channel
+
   txMsg.can_id = 0x220;
   txMsg.can_dlc = 8;
-  memset(txMsg.data, 0, 8);               // Clear all data bytes
+  memset(txMsg.data, 0, 8);   // Clear all bytes
 
-  // Little-endian packing of ch0 and ch1
+  // Little-endian packing
   txMsg.data[1] = ch0 & 0xFF;
   txMsg.data[2] = ch0 >> 8;
   txMsg.data[3] = ch1 & 0xFF;
@@ -82,88 +111,84 @@ void sendTorque() {
 
   // Attempt to send
   if (mcp2515.sendMessage(&txMsg) == MCP2515::ERROR_OK) {
-    tx_count++;            // Increment successful send counter
-    send_fail_count = 0;   // Reset failure streak on success
+    tx_count++;
+    send_fail_count = 0;   // Success resets failure counter
   } else {
-    send_fail_count++;     // Increment failure counter
+    send_fail_count++;
   }
 
-  // If too many consecutive failures, attempt to recover
+  // If too many consecutive failures, recover the MCP2515
   if (send_fail_count > 10) {
     canRecover();
   }
 }
 
-// ------------------------------------------------------------------
-// Send Speed Command (CAN ID 0x76)
+// =========================================================
+// SEND SPEED COMMAND (CAN ID 0x76)
 // Data format: speed*100 in bytes 5-6, counter in byte 7
-// ------------------------------------------------------------------
+// =========================================================
 void sendSpeed() {
-  // Clamp speed to max 655 (because 655 * 100 = 65500 fits in 16 bits)
+  // Clamp speed to max 655 (655 * 100 = 65500 fits in 16 bits)
   uint16_t sp = constrain(speed, 0, 655) * 100;
 
   txMsg.can_id = 0x76;
   txMsg.can_dlc = 8;
-  memset(txMsg.data, 0, 8);               // Clear previous data
+  memset(txMsg.data, 0, 8);   // Clear previous data
 
   // Little-endian speed value
   txMsg.data[5] = sp & 0xFF;
   txMsg.data[6] = sp >> 8;
-  txMsg.data[7] = counter & 0x0F;         // Lower 4 bits of counter
+  txMsg.data[7] = counter & 0x0F;   // Lower 4 bits of counter
 
-  // Send (no error checking needed for this frame per original design)
+  // Send (no error checking for speed frame – less critical)
   mcp2515.sendMessage(&txMsg);
 }
 
-// ------------------------------------------------------------------
-// Read Telemetry: Process all pending CAN messages
-// Expected ID: 0x221 (steering interceptor feedback)
+// =========================================================
+// READ TELEMETRY (CAN ID 0x221)
 // Outputs CSV line: TEL,adc0,adc1,override_flag,fault,counter,relay
-// ------------------------------------------------------------------
+// =========================================================
 void readTelemetry() {
-  // Read all available messages (prevents buffer overflow)
+  // Read all pending messages to avoid buffer overflow
   while (mcp2515.readMessage(&rxMsg) == MCP2515::ERROR_OK) {
     if (rxMsg.can_id == 0x221) {
-      rx_count++;   // Count received telemetry frames
+      rx_count++;
 
       // Extract ADC values (little-endian)
       uint16_t adc0 = rxMsg.data[1] | (rxMsg.data[2] << 8);
       uint16_t adc1 = rxMsg.data[3] | (rxMsg.data[4] << 8);
 
       uint8_t override_flag = rxMsg.data[5];
-      uint8_t fault = (rxMsg.data[7] >> 4) & 0x0F;  // Upper nibble of byte 7
+      uint8_t fault = (rxMsg.data[7] >> 4) & 0x0F;   // Upper nibble of byte 7
 
       // Relay control: engage if no fault and steering torque is applied
       uint8_t relay = (fault == 0 && abs(steer) > 0) ? 1 : 0;
 
-      // Output to Serial Monitor (CSV format)
+      // Send telemetry to Serial (for Python GUI)
       Serial.printf("TEL,%u,%u,%u,%u,%u,%u\n",
                     adc0, adc1, override_flag, fault, counter, relay);
     }
   }
 }
 
-// ------------------------------------------------------------------
-// Update Error LED:
-// - Solid ON if send_fail_count > 0 (communication problem)
-// - Blink fast if send_fail_count > 10 (recovery in progress)
-// - OFF if everything OK
-// ------------------------------------------------------------------
+// =========================================================
+// ERROR LED INDICATOR
+// - OFF:           No errors
+// - Solid ON:      1-10 consecutive send failures
+// - Blink (5 Hz):  >10 failures (recovery mode active)
+// =========================================================
 void updateErrorLed() {
   if (send_fail_count == 0) {
-    // No error: LED off
     digitalWrite(LED_ERR, LOW);
     led_state = false;
-  } 
+  }
   else if (send_fail_count <= 10) {
-    // Minor errors: LED solid on
     digitalWrite(LED_ERR, HIGH);
     led_state = true;
-  } 
+  }
   else {
-    // Severe errors (recovery mode): blink at 5 Hz (200ms period)
     unsigned long now = millis();
-    if (now - last_blink >= 200) {  // 200 ms = 5 Hz
+    if (now - last_blink >= 200) {   // 200ms = 5 Hz
       last_blink = now;
       led_state = !led_state;
       digitalWrite(LED_ERR, led_state);
@@ -171,43 +196,52 @@ void updateErrorLed() {
   }
 }
 
-// ------------------------------------------------------------------
-// Setup: Serial, SPI, MCP2515, LED pin
-// ------------------------------------------------------------------
+// =========================================================
+// SETUP: Serial, SPI, MCP2515, LED
+// =========================================================
 void setup() {
-  Serial.begin(115200);                     // USB serial for commands and telemetry
+  Serial.begin(115200);
 
-  // Configure LED pin
   pinMode(LED_ERR, OUTPUT);
   digitalWrite(LED_ERR, LOW);
 
-  // Initialize SPI with custom ESP32 VSPI pins
   SPI.begin(MCP_SCK, MCP_MISO, MCP_MOSI, MCP_CS);
 
-  // Initialize MCP2515 (reset, set bitrate, normal mode)
-  canRecover();
+  canRecover();   // Initialize MCP2515
+
+  // Initialise watchdog timer
+  last_cmd_time = millis();
 }
 
-// ------------------------------------------------------------------
-// Main Loop: 50 Hz execution
-// 1. Read serial commands (format: "CMD,steer,speed")
-// 2. Send CAN frames
-// 3. Read incoming telemetry
-// 4. Update counter and error LED
-// ------------------------------------------------------------------
+// =========================================================
+// MAIN LOOP (50 Hz)
+// 1. Read serial commands (CMD,steer,speed)
+// 2. Serial watchdog: zero outputs if command timeout
+// 3. Send CAN frames (torque + speed)
+// 4. Read incoming telemetry
+// 5. Update counters and error LED
+// =========================================================
 void loop() {
-  // ---------- Handle Serial Commands ----------
+  // ---------- Serial Command Input ----------
   if (Serial.available()) {
     String line = Serial.readStringUntil('\n');
     if (line.startsWith("CMD,")) {
       int s, sp;
-      // Parse two integers from the line
       if (sscanf(line.c_str(), "CMD,%d,%d", &s, &sp) == 2) {
-        // Apply bounds before storing
         steer = constrain(s, -2048, 2047);
         speed = constrain(sp, 0, 655);
+        // Refresh watchdog timer
+        last_cmd_time = millis();
       }
     }
+  }
+
+  // ---------- Serial Watchdog Fail-Safe ----------
+  if (millis() - last_cmd_time > CMD_TIMEOUT_MS) {
+    steer = 0;
+    speed = 0;
+    // Note: watchdog does not reset last_cmd_time, so zeros persist
+    // until a new command arrives.
   }
 
   // ---------- CAN Communication ----------
@@ -217,8 +251,8 @@ void loop() {
 
   // ---------- Update Counters and LED ----------
   counter = (counter + 1) & 0x0F;   // Rolling counter 0..15
-  updateErrorLed();                 // Reflect error status on LED
+  updateErrorLed();
 
-  // ---------- Timing: 50 Hz loop ----------
+  // ---------- 50 Hz Timing ----------
   delay(20);   // 20 ms = 50 Hz
 }
