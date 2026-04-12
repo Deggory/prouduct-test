@@ -1,68 +1,173 @@
 import tkinter as tk
+from tkinter import ttk
+import serial
+import serial.tools.list_ports
+import threading
+import math
+import re
+import time
 
+# =========================================================
+# GLOBAL STATE
+# =========================================================
+angle_value = 0.0
+min_angle = 9999
+max_angle = -9999
+packet_count = 0
+last_packet_time = time.time()
+
+mcp_status = "UNKNOWN"
+can_status = "NO CAN"
+detected_id = "NONE"
+last_sniff = ""
+
+ser = None
+
+
+# =========================================================
+# AUTO PORT DETECTION
+# =========================================================
+def auto_detect_port():
+    ports = serial.tools.list_ports.comports()
+    for p in ports:
+        if "USB" in p.description or "CP210" in p.description or "CH340" in p.description:
+            return p.device
+    return None
+
+
+# =========================================================
+# SERIAL THREAD
+# =========================================================
+def serial_reader():
+    global angle_value, min_angle, max_angle
+    global packet_count, last_packet_time
+    global mcp_status, can_status, detected_id, last_sniff
+
+    port = auto_detect_port()
+    if not port:
+        status_label.config(text="ESP32 NOT FOUND")
+        return
+
+    status_label.config(text=f"PORT: {port}")
+
+    try:
+        s = serial.Serial(port, 115200, timeout=1)
+    except Exception as e:
+        status_label.config(text=f"SERIAL ERROR: {e}")
+        return
+
+    while True:
+        try:
+            line = s.readline().decode(errors="ignore").strip()
+            if not line:
+                continue
+
+            last_sniff = line
+            sniff_label.config(text=line[:90])
+
+            # MCP/CAN status parse
+            if "MCP:OK" in line:
+                mcp_status = "OK"
+            elif "MCP:FAIL" in line:
+                mcp_status = "FAIL"
+
+            if "CAN:OK" in line:
+                can_status = "OK"
+            elif "CAN:FAIL" in line:
+                can_status = "NO CAN"
+
+            # sniff CAN ID
+            match_id = re.search(r"SNIFF ID:0x([0-9A-Fa-f]+)", line)
+            if match_id:
+                detected_id = "0x" + match_id.group(1)
+
+            # angle parse
+            match = re.search(r"ANGLE:([-0-9.]+)", line)
+            if match:
+                angle_value = float(match.group(1))
+                packet_count += 1
+                last_packet_time = time.time()
+
+                min_angle = min(min_angle, angle_value)
+                max_angle = max(max_angle, angle_value)
+
+        except:
+            pass
+
+
+# =========================================================
+# GAUGE DRAWING
+# =========================================================
+def update_gauge():
+    canvas.delete("all")
+
+    cx, cy = 200, 200
+    radius = 150
+
+    # outer circle
+    canvas.create_oval(cx-radius, cy-radius, cx+radius, cy+radius, width=3)
+
+    # zero center line
+    canvas.create_line(cx, cy-radius, cx, cy+radius, dash=(4, 2))
+
+    # needle
+    angle = max(-540, min(540, angle_value))
+    needle_deg = angle / 3.0
+    rad = math.radians(needle_deg - 90)
+
+    x = cx + radius * 0.8 * math.cos(rad)
+    y = cy + radius * 0.8 * math.sin(rad)
+
+    canvas.create_line(cx, cy, x, y, width=4)
+
+    # center point
+    canvas.create_oval(cx-5, cy-5, cx+5, cy+5, fill="black")
+
+    # labels
     angle_label.config(text=f"{angle_value:7.1f}°")
-    rate_label.config(text=f"Rate: {rate_value} deg/s")
-    packet_label.config(text=f"Packets: {packet_count}")
-    minmax_label.config(text=f"Min: {min_angle:7.1f}°   Max: {max_angle:7.1f}°")
-    mcp_label.config(text=f"MCP2515: {mcp_status}")
-    can_label.config(text=f"CAN: {can_status}")
-    sniff_label.config(text=last_sniff[:100])
-    detect_label.config(
-        text=f"Detected Steering ID: {detected_id}  Confidence: {detect_confidence}"
+    minmax_label.config(text=f"MIN {min_angle:.1f}°   MAX {max_angle:.1f}°")
+    packet_label.config(text=f"PACKETS: {packet_count}")
+    health_label.config(
+        text=f"MCP:{mcp_status}   CAN:{can_status}   ID:{detected_id}"
     )
 
-    root.after(50, update_gui)
+    # NO CAN warning
+    if time.time() - last_packet_time > 1.0:
+        canvas.create_text(200, 350, text="NO CAN", font=("Arial", 20))
+
+    root.after(50, update_gauge)
 
 
-# ================= GUI LAYOUT =================
+# =========================================================
+# GUI
+# =========================================================
 root = tk.Tk()
 root.title("Universal Steering CAN Dashboard")
-root.geometry("600x650")
+root.geometry("420x520")
 
-header = tk.Label(root, text=f"ESP32 Port: {PORT}", font=("Arial", 14, "bold"))
-header.pack(pady=5)
-
-canvas = tk.Canvas(root, width=500, height=300)
+canvas = tk.Canvas(root, width=400, height=400)
 canvas.pack()
 
-# Gauge arc + zero line
-canvas.create_arc(100, 60, 400, 360, start=45, extent=270, style="arc", width=3)
-canvas.create_line(250, 60, 250, 300, dash=(4, 2))
-
-angle_label = tk.Label(root, text="0.0°", font=("Arial", 36, "bold"))
+angle_label = tk.Label(root, text="0.0°", font=("Arial", 24))
 angle_label.pack()
 
-rate_label = tk.Label(root, text="Rate: 0 deg/s", font=("Arial", 18))
-rate_label.pack()
-
-packet_label = tk.Label(root, text="Packets: 0", font=("Arial", 18))
-packet_label.pack()
-
-minmax_label = tk.Label(root, text="Min: 0.0°   Max: 0.0°", font=("Arial", 18, "bold"))
+minmax_label = tk.Label(root, text="MIN/MAX")
 minmax_label.pack()
 
-mcp_label = tk.Label(root, text="MCP2515: UNKNOWN", font=("Arial", 18, "bold"))
-mcp_label.pack()
+packet_label = tk.Label(root, text="PACKETS: 0")
+packet_label.pack()
 
-can_label = tk.Label(root, text="CAN: FAIL", font=("Arial", 18, "bold"))
-can_label.pack()
+health_label = tk.Label(root, text="MCP:? CAN:? ID:?")
+health_label.pack()
 
-sniff_label = tk.Label(root, text="No frames yet", font=("Courier", 10), wraplength=550)
-sniff_label.pack(pady=10)
+sniff_label = tk.Label(root, text="", wraplength=380)
+sniff_label.pack()
 
-detect_label = tk.Label(
-    root,
-    text="Detected Steering ID: None  Confidence: LOW",
-    font=("Arial", 16, "bold")
-)
-detect_label.pack(pady=10)
+status_label = tk.Label(root, text="Starting...")
+status_label.pack()
 
-# Start serial thread
+# start serial thread
 threading.Thread(target=serial_reader, daemon=True).start()
-update_gui()
 
-try:
-    root.mainloop()
-finally:
-    running = False
-    ser.close()
+update_gauge()
+root.mainloop()
