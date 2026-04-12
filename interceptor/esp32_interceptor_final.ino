@@ -1,4 +1,216 @@
 /*
+ * ESP32 + MCP2515 CAN Interceptor (FINAL FIXED VERSION)
+ * - Stable CAN RX/TX
+ * - Auto recovery state machine
+ * - Clean GUI serial stream
+ * - Health monitoring
+ */
+
+#include <SPI.h>
+#include <mcp2515.h>
+
+// =========================
+// PINS
+// =========================
+#define MCP_CS   5
+#define MCP_SCK  18
+#define MCP_MISO 19
+#define MCP_MOSI 23
+
+// =========================
+// CAN OBJECT
+// =========================
+MCP2515 can(MCP_CS);
+struct can_frame rxMsg;
+struct can_frame txMsg;
+
+// =========================
+// CAN STATE MACHINE
+// =========================
+enum CAN_STATE {
+  CAN_OK,
+  CAN_WARNING,
+  CAN_FAIL
+};
+
+CAN_STATE canState = CAN_FAIL;
+
+// =========================
+// TIMERS
+// =========================
+unsigned long lastRxTime = 0;
+unsigned long lastTxTime = 0;
+unsigned long lastHealthCheck = 0;
+
+// =========================
+// ERROR TRACKING
+// =========================
+uint8_t errorCounter = 0;
+
+// =========================================================
+// INIT CAN
+// =========================================================
+bool initCAN() {
+  can.reset();
+  delay(20);
+
+  if (can.setBitrate(CAN_500KBPS, MCP_8MHZ) != MCP2515::ERROR_OK) {
+    Serial.println("[CAN] Bitrate init FAILED");
+    return false;
+  }
+
+  can.setNormalMode();
+
+  lastRxTime = millis();
+  lastTxTime = millis();
+  errorCounter = 0;
+  canState = CAN_OK;
+
+  Serial.println("[CAN] Initialized OK");
+  return true;
+}
+
+// =========================================================
+// CAN RECOVERY
+// =========================================================
+void recoverCAN() {
+  Serial.println("[CAN] RECOVERY START");
+
+  canState = CAN_FAIL;
+
+  for (int i = 0; i < 3; i++) {
+    if (initCAN()) {
+      Serial.println("[CAN] RECOVERY SUCCESS");
+      return;
+    }
+    delay(50);
+  }
+
+  Serial.println("[CAN] RECOVERY FAILED");
+}
+
+// =========================================================
+// UPDATE CAN STATE
+// =========================================================
+void updateCANState() {
+  unsigned long now = millis();
+
+  // No RX activity = possible bus issue
+  if (now - lastRxTime > 500) {
+    errorCounter++;
+  } else {
+    errorCounter = 0;
+  }
+
+  if (errorCounter == 0) {
+    canState = CAN_OK;
+  }
+  else if (errorCounter < 3) {
+    canState = CAN_WARNING;
+  }
+  else {
+    canState = CAN_FAIL;
+    recoverCAN();
+  }
+}
+
+// =========================================================
+// SEND CAN FRAME (SAFE)
+// =========================================================
+bool sendCAN(uint16_t id, uint8_t *data, uint8_t len) {
+
+  txMsg.can_id = id;
+  txMsg.can_dlc = len;
+
+  for (int i = 0; i < len; i++) {
+    txMsg.data[i] = data[i];
+  }
+
+  if (can.sendMessage(&txMsg) == MCP2515::ERROR_OK) {
+    lastTxTime = millis();
+    return true;
+  }
+
+  errorCounter++;
+  return false;
+}
+
+// =========================================================
+// READ CAN (NON-BLOCKING)
+// =========================================================
+void readCAN() {
+  while (can.readMessage(&rxMsg) == MCP2515::ERROR_OK) {
+
+    lastRxTime = millis();
+    errorCounter = 0;
+
+    // =========================
+    // CLEAN GUI FORMAT OUTPUT
+    // =========================
+    Serial.print("FRAME | ID:0x");
+    Serial.print(rxMsg.can_id, HEX);
+    Serial.print(" | LEN:");
+    Serial.print(rxMsg.can_dlc);
+    Serial.print(" | DATA:");
+
+    for (int i = 0; i < rxMsg.can_dlc; i++) {
+      Serial.print(" ");
+      Serial.print(rxMsg.data[i], HEX);
+    }
+
+    Serial.println();
+  }
+}
+
+// =========================================================
+// HEARTBEAT DEBUG (OPTIONAL)
+// =========================================================
+void printCANState() {
+  Serial.print("[CAN STATE] ");
+
+  if (canState == CAN_OK) Serial.println("OK");
+  else if (canState == CAN_WARNING) Serial.println("WARNING");
+  else Serial.println("FAIL");
+}
+
+// =========================================================
+// SETUP
+// =========================================================
+void setup() {
+  Serial.begin(115200);
+
+  SPI.begin(MCP_SCK, MCP_MISO, MCP_MOSI, MCP_CS);
+
+  Serial.println("=================================");
+  Serial.println(" ESP32 MCP2515 CAN INTERCEPTOR");
+  Serial.println("=================================");
+
+  if (!initCAN()) {
+    Serial.println("CAN INIT FAILED - retrying...");
+    delay(500);
+    recoverCAN();
+  }
+}
+
+// =========================================================
+// LOOP
+// =========================================================
+void loop() {
+
+  // 1. READ CAN BUS
+  readCAN();
+
+  // 2. UPDATE CAN HEALTH STATE
+  updateCANState();
+
+  // 3. PERIODIC STATUS (optional debug)
+  if (millis() - lastHealthCheck > 1000) {
+    lastHealthCheck = millis();
+    printCANState();
+  }
+
+  delay(5);  // stable CPU usage
+}/*
  * ESP32 + MCP2515 CAN Bus Interceptor
  * Auto-Calibration + Serial Watchdog + Error LED
  * 
