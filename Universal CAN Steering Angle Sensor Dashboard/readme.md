@@ -1,108 +1,133 @@
-Universal CAN Steering Angle Sensor Dashboard
+# 🚗 Automotive Steering CAN Dashboard (ESP32 + MCP2515)
 
-A complete ESP32 + MCP2515 + Python GUI toolkit for reverse engineering and testing any CAN-based steering angle sensor.
+A real-time CAN bus steering visualization system using **ESP32 + MCP2515 + Python (Tkinter GUI)** with **Kalman filtering, velocity estimation, and smooth steering animation**.
 
-Designed for:
+It decodes steering data from CAN ID `0x25` and displays:
+- Steering angle (real-time)
+- Steering rate (derived & filtered)
+- Live CAN frame monitor
+- Smooth steering needle gauge
 
-Toyota / Lexus spiral cable SAS
-EPS rack angle sensors
-Honda / Hyundai / BMW steering sensors
-Unknown junkyard CAN steering modules
-Bench calibration and center alignment
-Features
-ESP32 firmware
-MCP2515 init status (OK / FAIL)
-CAN alive status (OK / FAIL timeout)
-Full CAN sniffer output
-Universal unknown CAN ID discovery
-Optional Toyota 0x25 decoder path
-8 MHz MCP2515 support
-Well-commented for GitHub collaboration
-Python GUI
-Auto-detect serial port
-Round steering gauge
-Moving needle
-Zero center line
-Packet counter
-Min / Max capture
-MCP2515 + CAN status
-Live sniffer panel
-Automatic steering CAN-ID detection
-Confidence score
-Universal sensor support 
-Installation
-pip install pyserial
-Wiring
-ESP32 ↔ MCP2515
-CS -> GPIO5
-INT -> GPIO4
-SCK -> GPIO18
-MISO -> GPIO19
-MOSI -> GPIO23
-VCC -> 5V
-GND -> GND
-MCP2515 crystal
+---
 
-This project is configured for:
+# 📌 Features
 
-8 MHz MCP2515
-How Auto CAN-ID Detection Works
+## 🧠 Signal Processing
+- Kalman filter for steering angle smoothing
+- Window-based velocity estimation (rate)
+- Deadband filtering to remove jitter
+- Latency-compensated timing using high precision clock
 
-The GUI watches all sniffed IDs and finds the ID that:
+## 📊 Visualization
+- Real-time steering needle gauge
+- Live numeric display:
+  - Steering angle (°)
+  - Steering rate (°/s)
+- Live CAN frame log viewer
 
-repeats frequently
-changes payload during rotation
-changes smoothly like steering
+## 🔌 Hardware Support
+- ESP32 (USB serial communication)
+- MCP2515 CAN module
+- Automatic USB/COM port detection
 
-Then it prints:
+---
 
-Detected Steering ID: 0xXXX
-Confidence: HIGH
-
-This makes it universal for almost any CAN steering sensor.
-
-GitHub README tips
-
-Suggested repo structure:
-
-/firmware/steering_can_dashboard.ino
-/gui/steering_dashboard.py
-README.md
-
-This document can directly be used as your README.md.
-
-Done — I created a new GitHub-ready README.md style document with:
-
-✅ Included in the new document
-final ESP32 firmware
-final universal Python GUI
-heavy code comments
-beginner-friendly explanations
-auto CAN-ID detection logic
-full wiring section
-install steps
-GitHub folder structure recommendation
-universal sensor workflow
-Toyota + unknown sensor support
-
-I also made the code clean enough for new contributors, so anyone helping on GitHub can quickly understand:
-
-sniffer logic
-CAN-ID detection
-Toyota fast decoder
-GUI threading
-gauge rendering
-packet analysis
+# ⚙️ System Architecture
+CAN Bus → MCP2515 → ESP32 → USB Serial → Python GUI
 
 
-✅ Install required package
+---
 
-On Ubuntu:
+# 📡 CAN Frame Format (ID: 0x25)
 
-sudo apt install python3-serial
+Example frame:
+
+FRAME 12 | ID:0x25 | LEN:8 | DATA: 10 87 88 00 78 78 00 3C
 
 
+---
 
-sudo python3 steering_dashboard.py
-✅ Run
-python3 steering_dashboard.py
+# 🧮 Signal Decoding
+
+## Steering Angle
+- 12-bit signed value
+- Extracted from bytes 0–1
+- Scaling: `* 1.5`
+
+## Steering Fraction
+- 4-bit signed nibble (byte 4 high nibble)
+- Scaling: `* 0.1`
+
+## Steering Rate
+- NOT directly trusted from CAN
+- Computed using:
+
+- rate = Δangle / Δtime
+
+- 
+- Filtered using:
+  - Moving window (last samples)
+  - Exponential smoothing
+  - Deadband filtering (< 0.5 ignored)
+
+---
+
+# 🧰 Requirements
+
+Install dependencies:
+
+```bash
+pip install pyserial matplotlib
+
+🚀 How to Run
+1. Connect Hardware
+ESP32 connected to MCP2515 CAN module
+USB connected to PC
+CAN bus connected to vehicle/test system
+2. Run GUI
+python3 steering_gui.py
+🔌 Linux USB Permission Fix
+
+If /dev/ttyUSB0 access fails:
+
+sudo usermod -a -G dialout $USER
+reboot
+🖥️ GUI Layout
+Left Panel
+Live CAN frame log
+START / STOP controls
+Right Panel
+Steering gauge (needle display)
+Angle and rate values
+📈 System Behavior
+Condition	Output Behavior
+Steering centered	0° angle / 0°s rate
+Slow movement	smooth low rate values
+Fast movement	high rate response
+No movement	stable zero output
+⚠️ Important Notes
+Steering rate is derived, not directly trusted from CAN
+Kalman filter introduces slight smoothing delay (normal)
+Low-speed rate may appear near zero due to noise filtering
+This system is optimized for stability over raw sensitivity
+🔧 Troubleshooting
+ESP32 not detected
+Check USB cable
+Ensure CP210x drivers installed
+Try different USB port
+No CAN data
+Check MCP2515 wiring (SPI lines)
+Verify CAN baud rate (default: 500 kbps)
+Rate feels delayed or flat
+This is expected due to filtering and window averaging
+🚀 Future Improvements
+True DBC-based automatic decoding
+CAN signal reverse engineering tool
+Steering torque estimation
+OpenPilot / ROS bridge integration
+Data logging + replay system
+AI-based noise filtering
+📜 License
+
+For educational and development use only.
+
