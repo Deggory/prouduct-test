@@ -3,122 +3,148 @@
 #include <mcp_can.h>
 
 // =====================================================
-// ESP32 <-> MCP2515 PIN DEFINITIONS
-// Crystal = 8 MHz
+// PIN CONFIG
 // =====================================================
 #define CAN_CS   5
 #define CAN_INT  4
 
-// VSPI pins on ESP32
 #define CAN_SCK  18
 #define CAN_MISO 19
 #define CAN_MOSI 23
 
-// MCP2515 object
 MCP_CAN CAN0(CAN_CS);
 
 // =====================================================
-// GLOBAL VARIABLES
+// FIXED MCP CLOCK (YOU SAID 8MHz)
 // =====================================================
-unsigned long rxId = 0;
+#define MCP_CLOCK MCP_8MHZ
+
+// =====================================================
+// CAN SPEED LIST
+// =====================================================
+const long canSpeeds[] = {
+  CAN_125KBPS,
+  CAN_250KBPS,
+  CAN_500KBPS
+};
+
+const char* speedNames[] = {
+  "125KBPS",
+  "250KBPS",
+  "500KBPS"
+};
+
+// =====================================================
+// GLOBALS
+// =====================================================
+unsigned long rxId;
 unsigned char len = 0;
 unsigned char rxBuf[8];
 
-int totalSteerAngle = 0;
-int steerRate = 0;
-
 unsigned long lastCanRx = 0;
+bool canFound = false;
 
 // =====================================================
-// OPTIONAL TOYOTA 0x25 DECODER
+// TRY SINGLE SPEED
 // =====================================================
-void decodeToyotaSteering(const unsigned char *buf) {
-  int rawAngle = ((buf[0] & 0x0F) << 8) | buf[1];
+bool testSpeed(long speed, const char* name) {
 
-  // signed 12-bit
-  if (rawAngle & 0x800) rawAngle -= 0x1000;
+  Serial.print("[TEST] ");
+  Serial.println(name);
 
-  int angle = rawAngle * 15; // 1.5 deg * 10
+  CAN0.reset();
+  delay(50);
 
-  int frac = (buf[4] >> 4) & 0x0F;
-  if (frac > 8) frac -= 16;
+  if (CAN0.begin(MCP_ANY, speed, MCP_CLOCK) != CAN_OK) {
+    return false;
+  }
 
-  int rawRate = ((buf[4] & 0x0F) << 8) | buf[5];
-  if (rawRate & 0x800) rawRate -= 0x1000;
+  CAN0.setMode(MCP_NORMAL);
+  delay(50);
 
-  steerRate = rawRate;
-  totalSteerAngle = angle + frac;
+  unsigned long start = millis();
+
+  while (millis() - start < 400) {
+
+    if (CAN0.checkReceive() == CAN_MSGAVAIL) {
+
+      CAN0.readMsgBuf(&rxId, &len, rxBuf);
+
+      Serial.print("[OK] CAN DETECTED AT ");
+      Serial.println(name);
+
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// =====================================================
+// AUTO BAUD DETECTION
+// =====================================================
+void autoBaud() {
+
+  Serial.println("\n========================");
+  Serial.println("AUTO CAN SPEED DETECTOR");
+  Serial.println("========================");
+
+  for (int i = 0; i < 3; i++) {
+
+    if (testSpeed(canSpeeds[i], speedNames[i])) {
+
+      Serial.println("[SUCCESS] CAN BUS FOUND");
+      canFound = true;
+      return;
+    }
+  }
+
+  Serial.println("[FAIL] NO CAN TRAFFIC FOUND");
+  canFound = false;
 }
 
 // =====================================================
 // SETUP
 // =====================================================
 void setup() {
+
   Serial.begin(115200);
   delay(1000);
 
-  Serial.println("Universal Steering CAN Dashboard");
+  Serial.println("\nESP32 MCP2515 AUTO BAUD SYSTEM (8MHz)");
 
-  // Start VSPI bus
   SPI.begin(CAN_SCK, CAN_MISO, CAN_MOSI, CAN_CS);
 
-  // Start MCP2515
-  if (CAN0.begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ) == CAN_OK) {
-    Serial.println("MCP:OK");
-  } else {
-    Serial.println("MCP:FAIL");
-    while (1);
-  }
-
-  CAN0.setMode(MCP_NORMAL);
-
-  pinMode(CAN_INT, INPUT);
-
-  Serial.println("CAN Sniffer Ready");
+  autoBaud();
 }
 
 // =====================================================
-// MAIN LOOP
+// LOOP
 // =====================================================
 void loop() {
-  bool can_alive = (millis() - lastCanRx) < 1000;
 
-  // New CAN frame available
-  if (digitalRead(CAN_INT) == LOW) {
-    if (CAN0.readMsgBuf(&rxId, &len, rxBuf) == CAN_OK) {
-
-      lastCanRx = millis();
-
-      // -------------------------------
-      // UNIVERSAL CAN SNIFFER OUTPUT
-      // -------------------------------
-      Serial.printf("SNIFF ID:0x%lX LEN:%d DATA:", rxId, len);
-      for (int i = 0; i < len; i++) {
-        Serial.printf(" %02X", rxBuf[i]);
-      }
-      Serial.println();
-
-      // -------------------------------
-      // Optional Toyota fast decode
-      // -------------------------------
-      if (rxId == 0x25 && len >= 6) {
-        decodeToyotaSteering(rxBuf);
-
-        Serial.print("MCP:OK,CAN:OK,ANGLE:");
-        Serial.print(totalSteerAngle / 10.0);
-        Serial.print(",RATE:");
-        Serial.println(steerRate);
-      }
-    }
+  if (!canFound) {
+    delay(500);
+    return;
   }
 
-  // CAN timeout health message
-  static unsigned long lastStatus = 0;
-  if (millis() - lastStatus > 1000) {
-    lastStatus = millis();
+  if (CAN0.checkReceive() == CAN_MSGAVAIL) {
 
-    if (!can_alive) {
-      Serial.println("MCP:OK,CAN:FAIL");
+    CAN0.readMsgBuf(&rxId, &len, rxBuf);
+    lastCanRx = millis();
+
+    // ================= GUI FORMAT =================
+    Serial.printf("ID:0x%lX LEN:%d", rxId, len);
+
+    for (int i = 0; i < len; i++) {
+      Serial.printf(" %02X", rxBuf[i]);
     }
+
+    Serial.println();
+  }
+
+  // ================= CAN HEALTH =================
+  if (millis() - lastCanRx > 1000) {
+    Serial.println("CAN:TIMEOUT");
   }
 }
