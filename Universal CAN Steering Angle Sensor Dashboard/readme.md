@@ -100,5 +100,9 @@ packet analysis
 On Ubuntu:
 
 sudo apt install python3-serial
+
+
+
+sudo python3 steering_dashboard.py
 ✅ Run
 python3 steering_dashboard.py
