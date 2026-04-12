@@ -1,155 +1,170 @@
 import tkinter as tk
+from tkinter import ttk
 import serial
 import serial.tools.list_ports
 import threading
 import math
 import re
 import time
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 # =========================
-# STATE
+# GLOBAL STATE
 # =========================
-packet_count = 0
-last_rx = time.time()
-
-can_id = "NONE"
-last_frame = ""
-
 angle = 0.0
-
+rate = 0.0
+running = True
+ser = None
 
 # =========================
-# FIND ESP32 PORT
+# AUTO DETECT ESP32
 # =========================
-def find_port():
+def find_esp32():
     ports = serial.tools.list_ports.comports()
-
     for p in ports:
-        d = (p.description or "").lower()
-        dev = (p.device or "").lower()
-
-        if "cp210" in d or "ch340" in d or "usb" in dev or "ttyusb" in dev or "ttyacm" in dev:
+        if "USB" in p.description or "UART" in p.description or "CP210" in p.description:
             return p.device
-
     return None
 
+# =========================
+# DECODER (BASED ON YOUR C++)
+# =========================
+def decode_steering(data):
+    try:
+        # ===== STEER ANGLE (12-bit signed) =====
+        steerAngle = ((data[0] & 0x0F) << 8) | data[1]
+        if steerAngle & 0x0800:
+            steerAngle -= 0x1000
+        steerAngle = steerAngle * 1.5
+
+        # ===== STEER FRACTION (4-bit signed) =====
+        frac = (data[4] & 0xF0) >> 4
+        if frac & 0x08:
+            frac -= 0x10
+        frac = frac * 0.1   # approx scaling
+
+        # ===== STEER RATE (12-bit signed) =====
+        rate_raw = ((data[4] & 0x0F) << 8) | data[5]
+        if rate_raw & 0x0800:
+            rate_raw -= 0x1000
+        rate_raw = rate_raw * 1
+
+        total_angle = steerAngle + frac
+
+        return total_angle, rate_raw
+
+    except:
+        return None, None
 
 # =========================
 # SERIAL THREAD
 # =========================
-def reader():
-    global packet_count, last_rx, can_id, last_frame, angle
+def read_serial():
+    global angle, rate, ser, running
 
-    port = find_port()
-
-    if not port:
-        status.config(text="ESP32 NOT FOUND")
-        return
-
-    status.config(text=f"PORT: {port}")
-
-    try:
-        s = serial.Serial(port, 115200, timeout=1)
-    except Exception as e:
-        status.config(text=f"SERIAL ERROR: {e}")
-        return
-
-    while True:
+    while running:
         try:
-            line = s.readline().decode(errors="ignore").strip()
-            if not line:
+            line = ser.readline().decode(errors='ignore').strip()
+
+            if not line.startswith("FRAME"):
                 continue
 
-            last_frame = line
-            sniff.config(text=line[:120])
+            log_box.insert(tk.END, line + "\n")
+            log_box.see(tk.END)
 
-            # ================= FRAME DETECT =================
-            if "FRAME" in line:
+            match = re.search(r"ID:0x([0-9A-Fa-f]+).*DATA:(.*)", line)
+            if not match:
+                continue
 
-                packet_count += 1
-                last_rx = time.time()
+            can_id = int(match.group(1), 16)
+            data = [int(x, 16) for x in match.group(2).split()]
 
-                # ================= CAN ID =================
-                m = re.search(r"ID:0x([0-9A-Fa-f]+)", line)
-                if m:
-                    can_id = "0x" + m.group(1)
-
-                # ================= OPTIONAL: ANGLE FROM DATA =================
-                # Example: use first byte as steering proxy
-                d = re.search(r"DATA:\s*([0-9A-Fa-f ]+)", line)
-                if d:
-                    try:
-                        bytes_str = d.group(1).strip().split()
-                        if len(bytes_str) > 0:
-                            angle = int(bytes_str[0], 16)  # simple mapping
-                    except:
-                        pass
+            if can_id == 0x25 and len(data) >= 6:
+                a, r = decode_steering(data)
+                if a is not None:
+                    angle = a
+                    rate = r
 
         except:
-            pass
-
-
-# =========================
-# DRAW GAUGE
-# =========================
-def draw():
-    canvas.delete("all")
-
-    cx, cy = 200, 200
-    r = 150
-
-    canvas.create_oval(cx-r, cy-r, cx+r, cy+r, width=3)
-    canvas.create_line(cx, cy-r, cx, cy+r, dash=(4, 2))
-
-    # clamp
-    limited = max(-540, min(540, angle))
-
-    rad = math.radians((limited / 3.0) - 90)
-
-    x = cx + r * 0.8 * math.cos(rad)
-    y = cy + r * 0.8 * math.sin(rad)
-
-    canvas.create_line(cx, cy, x, y, width=4, fill="red")
-    canvas.create_oval(cx-5, cy-5, cx+5, cy+5, fill="black")
-
-    # labels
-    angle_lbl.config(text=f"{angle:.1f}")
-    packets.config(text=f"PACKETS {packet_count}")
-    health.config(text=f"CAN ID: {can_id}")
-
-    # NO SIGNAL
-    if time.time() - last_rx > 1.0:
-        canvas.create_text(200, 350, text="NO SIGNAL", fill="red", font=("Arial", 18))
-
-    root.after(50, draw)
-
+            continue
 
 # =========================
-# GUI
+# GAUGE UPDATE
+# =========================
+def update_gauge():
+    ax.clear()
+    ax.set_xlim(-1, 1)
+    ax.set_ylim(-1, 1)
+
+    # circle
+    circle = plt.Circle((0, 0), 0.9, fill=False, linewidth=2)
+    ax.add_patch(circle)
+
+    # needle (angle)
+    try:
+        theta = math.radians(180 - angle)
+        x = 0.8 * math.cos(theta)
+        y = 0.8 * math.sin(theta)
+        ax.plot([0, x], [0, y], linewidth=3)
+    except:
+        pass
+
+    ax.text(-0.9, 0.9, f"Angle: {angle:.2f}°", fontsize=12)
+    ax.text(-0.9, 0.75, f"Rate: {rate:.2f} °/s", fontsize=12)
+
+    canvas.draw()
+    root.after(50, update_gauge)
+
+# =========================
+# START SERIAL
+# =========================
+def start_serial():
+    global ser
+
+    port = find_esp32()
+    if not port:
+        log_box.insert(tk.END, "ESP32 NOT FOUND\n")
+        return
+
+    ser = serial.Serial(port, 115200, timeout=1)
+    log_box.insert(tk.END, f"Connected: {port}\n")
+
+    t = threading.Thread(target=read_serial, daemon=True)
+    t.start()
+
+# =========================
+# STOP
+# =========================
+def stop_app():
+    global running
+    running = False
+    if ser:
+        ser.close()
+    root.destroy()
+
+# =========================
+# UI
 # =========================
 root = tk.Tk()
-root.title("CAN Dashboard (FIXED FOR YOUR FIRMWARE)")
-root.geometry("420x560")
+root.title("CAN Steering Dashboard (Angle + Rate)")
+root.geometry("1000x600")
 
-canvas = tk.Canvas(root, width=400, height=400)
-canvas.pack()
+left = tk.Frame(root)
+left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-angle_lbl = tk.Label(root, text="0", font=("Arial", 22))
-angle_lbl.pack()
+right = tk.Frame(root)
+right.pack(side=tk.RIGHT, fill=tk.BOTH)
 
-packets = tk.Label(root, text="PACKETS 0")
-packets.pack()
+log_box = tk.Text(left)
+log_box.pack(fill=tk.BOTH, expand=True)
 
-health = tk.Label(root, text="CAN ID: NONE")
-health.pack()
+fig, ax = plt.subplots(figsize=(4,4))
+canvas = FigureCanvasTkAgg(fig, master=right)
+canvas.get_tk_widget().pack()
 
-sniff = tk.Label(root, text="", wraplength=380)
-sniff.pack()
+ttk.Button(left, text="START", command=start_serial).pack()
+ttk.Button(left, text="STOP", command=stop_app).pack()
 
-status = tk.Label(root, text="Starting...")
-status.pack()
-
-
-threading.Thread(target=reader, daemon=True).start()
-draw()
+update_gauge()
 root.mainloop()
