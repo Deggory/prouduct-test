@@ -7,6 +7,296 @@ import queue
 import time
 
 # =========================================================
+# CONFIG
+# =========================================================
+BAUD = 115200
+SERIAL_WATCHDOG_MS = 200
+SERIAL_TIMEOUT = 0.1
+
+STEER_DEADZONE = 0.05
+THROTTLE_DEADZONE = 0.10
+
+MAX_STEER = 22
+MAX_SPEED = 140.0
+
+ACCEL_RATE = 40.0
+BRAKE_RATE = 60.0
+DRAG_RATE = 10.0
+WATCHDOG_DRAG_MULTIPLIER = 2.0
+
+MAX_STEP = 8
+
+STEER_AXIS = 0
+THROTTLE_AXIS = 1
+THROTTLE_INVERT = True
+
+# =========================================================
+# STATE
+# =========================================================
+speed_kph = 0.0
+current_steer = 0
+throttle_input = 0.0
+
+telemetry_tx = 0
+telemetry_rx = 0
+
+last_loop_time = time.monotonic()
+last_tx_time = 0.0
+
+running = True
+ser = None
+current_port = None
+
+js = None
+joystick_name = "Not Connected"
+
+data_queue = queue.Queue()
+
+# =========================================================
+# INIT PYGAME
+# =========================================================
+pygame.init()
+pygame.joystick.init()
+
+# =========================================================
+# HELPERS
+# =========================================================
+def clamp(v):
+    return max(-1.0, min(1.0, v))
+
+
+def slew(target, current):
+    if target > current + MAX_STEP:
+        return current + MAX_STEP
+    if target < current - MAX_STEP:
+        return current - MAX_STEP
+    return target
+
+
+def find_port():
+    ports = list(list_ports.comports())
+    for p in ports:
+        if any(x in p.description for x in ["CP210", "CH340", "USB", "UART"]):
+            return p.device
+    return None
+
+
+def open_serial():
+    global ser, current_port
+    port = find_port()
+
+    if not port:
+        return False
+
+    if ser and ser.is_open and current_port == port:
+        return True
+
+    try:
+        if ser:
+            ser.close()
+    except:
+        pass
+
+    try:
+        ser = serial.Serial(port, BAUD, timeout=SERIAL_TIMEOUT)
+        current_port = port
+        return True
+    except:
+        ser = None
+        current_port = None
+        return False
+
+
+def joystick_ok():
+    global js, joystick_name
+
+    try:
+        pygame.joystick.init()
+
+        if pygame.joystick.get_count() == 0:
+            js = None
+            joystick_name = "Not Connected"
+            return False
+
+        if js is None:
+            js = pygame.joystick.Joystick(0)
+            js.init()
+            joystick_name = js.get_name()
+
+        return True
+    except:
+        js = None
+        return False
+
+
+def update_speed(dt, throttle):
+    global speed_kph
+
+    if abs(throttle) < THROTTLE_DEADZONE:
+        throttle = 0.0
+
+    if throttle > 0:
+        speed_kph += throttle * ACCEL_RATE * dt
+    elif throttle < 0:
+        speed_kph -= abs(throttle) * BRAKE_RATE * dt
+    else:
+        speed_kph -= DRAG_RATE * dt
+
+    speed_kph = max(0.0, min(MAX_SPEED, speed_kph))
+
+
+# =========================================================
+# SERIAL THREAD
+# =========================================================
+def serial_reader():
+    global running, ser
+
+    while running:
+        if not open_serial():
+            time.sleep(0.5)
+            continue
+
+        try:
+            line = ser.readline().decode(errors="ignore").strip()
+
+            if line.startswith("TEL,"):
+                data_queue.put(line)
+
+        except:
+            try:
+                ser.close()
+            except:
+                pass
+            ser = None
+            time.sleep(0.5)
+
+
+# =========================================================
+# GUI UPDATE
+# =========================================================
+def update_gui():
+    global telemetry_rx
+
+    try:
+        while True:
+            line = data_queue.get_nowait()
+            parts = line.split(",")
+
+            if len(parts) == 7:
+                _, adc0, adc1, override, fault, counter, relay = parts
+
+                telemetry_rx += 1
+                labels["adc0"].config(text=f"ADC0: {adc0}")
+                labels["adc1"].config(text=f"ADC1: {adc1}")
+                labels["fault"].config(text=f"Fault: {fault}")
+                labels["relay"].config(text=f"Relay: {'ON' if int(relay) else 'OFF'}")
+                labels["rx"].config(text=f"RX: {telemetry_rx}")
+
+    except queue.Empty:
+        pass
+
+    labels["status"].config(
+        text=f"ESP32: {current_port or 'Searching'} | JS: {joystick_name}"
+    )
+
+    labels["speed"].config(text=f"Speed: {speed_kph:.1f}")
+    labels["steer"].config(text=f"Steer: {current_steer}")
+    labels["tx"].config(text=f"TX: {telemetry_tx}")
+
+    root.after(50, update_gui)
+
+
+# =========================================================
+# CONTROL LOOP
+# =========================================================
+def control_loop():
+    global current_steer, throttle_input
+    global last_loop_time, last_tx_time, telemetry_tx
+
+    now = time.monotonic()
+    dt = now - last_loop_time
+    last_loop_time = now
+
+    watchdog = (now - last_tx_time) > (SERIAL_WATCHDOG_MS / 1000)
+
+    if watchdog:
+        throttle_input = 0.0
+        current_steer = slew(0, current_steer)
+        speed_kph = max(0, speed_kph - DRAG_RATE * dt * WATCHDOG_DRAG_MULTIPLIER)
+
+    else:
+        if not joystick_ok():
+            throttle_input = 0.0
+        else:
+            pygame.event.pump()
+
+            steer = clamp(js.get_axis(STEER_AXIS))
+            throttle = clamp(js.get_axis(THROTTLE_AXIS))
+
+            if THROTTLE_INVERT:
+                throttle = -throttle
+
+            throttle_input = throttle
+
+            target = int(steer * MAX_STEER)
+            current_steer = slew(target, current_steer)
+
+            update_speed(dt, throttle)
+
+    if ser and ser.is_open:
+        try:
+            cmd = f"CMD,{current_steer},{int(speed_kph)}\n"
+            ser.write(cmd.encode())
+            telemetry_tx += 1
+            last_tx_time = now
+        except:
+            pass
+
+    root.after(20, control_loop)
+
+
+# =========================================================
+# EXIT
+# =========================================================
+def on_close():
+    global running
+    running = False
+    try:
+        if ser:
+            ser.close()
+    except:
+        pass
+    pygame.quit()
+    root.destroy()
+
+
+# =========================================================
+# GUI
+# =========================================================
+root = tk.Tk()
+root.title("Interceptor Pro GUI (Fixed)")
+root.geometry("600x750")
+root.protocol("WM_DELETE_WINDOW", on_close)
+
+labels = {}
+for k in ["status", "steer", "speed", "adc0", "adc1", "fault", "relay", "tx", "rx"]:
+    labels[k] = tk.Label(root, text=f"{k}: ---", font=("Arial", 16))
+    labels[k].pack()
+
+threading.Thread(target=serial_reader, daemon=True).start()
+
+root.after(50, update_gui)
+root.after(20, control_loop)
+
+root.mainloop()import tkinter as tk
+import serial
+from serial.tools import list_ports
+import pygame
+import threading
+import queue
+import time
+
+# =========================================================
 # CONFIGURATION (USER EDITABLE)
 # =========================================================
 BAUD = 115200
