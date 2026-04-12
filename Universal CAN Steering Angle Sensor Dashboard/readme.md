@@ -93,3 +93,12 @@ Toyota fast decoder
 GUI threading
 gauge rendering
 packet analysis
+
+
+✅ Install required package
+
+On Ubuntu:
+
+sudo apt install python3-serial
+✅ Run
+python3 steering_dashboard.py
