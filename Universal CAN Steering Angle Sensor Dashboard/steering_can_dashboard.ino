@@ -3,7 +3,7 @@
 #include <mcp_can.h>
 
 // =====================================================
-// PIN CONFIG
+// PIN CONFIG (ESP32 VSPI)
 // =====================================================
 #define CAN_CS   5
 #define CAN_INT  4
@@ -12,10 +12,11 @@
 #define CAN_MISO 19
 #define CAN_MOSI 23
 
+// MCP2515 object
 MCP_CAN CAN0(CAN_CS);
 
 // =====================================================
-// FIXED MCP CLOCK (YOU SAID 8MHz)
+// MCP CLOCK
 // =====================================================
 #define MCP_CLOCK MCP_8MHZ
 
@@ -35,9 +36,9 @@ const char* speedNames[] = {
 };
 
 // =====================================================
-// GLOBALS
+// GLOBAL VARIABLES
 // =====================================================
-unsigned long rxId;
+unsigned long rxId = 0;
 unsigned char len = 0;
 unsigned char rxBuf[8];
 
@@ -45,32 +46,31 @@ unsigned long lastCanRx = 0;
 bool canFound = false;
 
 // =====================================================
-// TRY SINGLE SPEED
+// TEST SINGLE SPEED (FIXED)
 // =====================================================
 bool testSpeed(long speed, const char* name) {
 
   Serial.print("[TEST] ");
   Serial.println(name);
 
-  CAN0.reset();
-  delay(50);
-
+  // SAFE REINIT (NO reset())
   if (CAN0.begin(MCP_ANY, speed, MCP_CLOCK) != CAN_OK) {
+    Serial.println("  -> INIT FAIL");
     return false;
   }
 
   CAN0.setMode(MCP_NORMAL);
-  delay(50);
+  delay(100);
 
   unsigned long start = millis();
 
-  while (millis() - start < 400) {
+  while (millis() - start < 500) {
 
     if (CAN0.checkReceive() == CAN_MSGAVAIL) {
 
       CAN0.readMsgBuf(&rxId, &len, rxBuf);
 
-      Serial.print("[OK] CAN DETECTED AT ");
+      Serial.print("[OK] CAN FOUND AT ");
       Serial.println(name);
 
       return true;
@@ -85,21 +85,21 @@ bool testSpeed(long speed, const char* name) {
 // =====================================================
 void autoBaud() {
 
-  Serial.println("\n========================");
-  Serial.println("AUTO CAN SPEED DETECTOR");
-  Serial.println("========================");
+  Serial.println("\n==========================");
+  Serial.println(" AUTO CAN BAUD DETECTOR");
+  Serial.println("==========================");
 
   for (int i = 0; i < 3; i++) {
 
     if (testSpeed(canSpeeds[i], speedNames[i])) {
 
-      Serial.println("[SUCCESS] CAN BUS FOUND");
+      Serial.println("[SUCCESS] CAN BUS DETECTED");
       canFound = true;
       return;
     }
   }
 
-  Serial.println("[FAIL] NO CAN TRAFFIC FOUND");
+  Serial.println("[FAIL] NO CAN TRAFFIC DETECTED");
   canFound = false;
 }
 
@@ -111,10 +111,12 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
-  Serial.println("\nESP32 MCP2515 AUTO BAUD SYSTEM (8MHz)");
+  Serial.println("\nESP32 MCP2515 SMART CAN SCANNER");
 
+  // SPI INIT
   SPI.begin(CAN_SCK, CAN_MISO, CAN_MOSI, CAN_CS);
 
+  // AUTO BAUD
   autoBaud();
 }
 
@@ -128,13 +130,14 @@ void loop() {
     return;
   }
 
+  // ================= CAN READ =================
   if (CAN0.checkReceive() == CAN_MSGAVAIL) {
 
     CAN0.readMsgBuf(&rxId, &len, rxBuf);
     lastCanRx = millis();
 
-    // ================= GUI FORMAT =================
-    Serial.printf("ID:0x%lX LEN:%d", rxId, len);
+    // PRINT FULL FRAME
+    Serial.printf("ID:0x%lX LEN:%d DATA:", rxId, len);
 
     for (int i = 0; i < len; i++) {
       Serial.printf(" %02X", rxBuf[i]);
@@ -145,6 +148,6 @@ void loop() {
 
   // ================= CAN HEALTH =================
   if (millis() - lastCanRx > 1000) {
-    Serial.println("CAN:TIMEOUT");
+    Serial.println("CAN:TIMEOUT / NO TRAFFIC");
   }
 }
