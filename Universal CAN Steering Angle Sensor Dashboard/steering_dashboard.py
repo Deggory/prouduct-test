@@ -6,9 +6,8 @@ import math
 import re
 import time
 
-
 # =========================
-# STATE VARIABLES
+# STATE
 # =========================
 angle = 0.0
 min_angle = 9999
@@ -38,7 +37,7 @@ def find_port():
 
 
 # =========================
-# SERIAL THREAD
+# SERIAL READER THREAD
 # =========================
 def reader():
     global angle, min_angle, max_angle
@@ -67,27 +66,30 @@ def reader():
 
             sniff.config(text=line[:100])
 
-            # MCP status
-            if "MCP:OK" in line:
+            # ================= MCP STATUS =================
+            if "MCP INIT OK" in line:
                 mcp = "OK"
-            if "MCP:FAIL" in line:
+            if "MCP INIT FAIL" in line:
                 mcp = "FAIL"
 
-            # CAN status
-            if "CAN:OK" in line:
+            # ================= CAN STATUS =================
+            if "CAN:NO CAN DETECTED" in line:
+                can = "NO BUS"
+            elif "CAN:TIMEOUT" in line:
+                can = "NO SIGNAL"
+            elif "CAN DETECTED" in line:
                 can = "OK"
-            if "CAN:FAIL" in line:
-                can = "NO CAN"
 
-            # CAN ID detect
-            m = re.search(r"SNIFF ID:0x([0-9A-Fa-f]+)", line)
+            # ================= CAN ID =================
+            m = re.search(r"ID:0x([0-9A-Fa-f]+)", line)
             if m:
                 can_id = "0x" + m.group(1)
 
-            # ANGLE detect
-            a = re.search(r"ANGLE:([-0-9.]+)", line)
+            # ================= ANGLE =================
+            a = re.search(r"ANG:([-0-9.]+)", line)
             if a:
                 angle = float(a.group(1))
+
                 packet_count += 1
                 last_rx = time.time()
 
@@ -99,7 +101,7 @@ def reader():
 
 
 # =========================
-# GAUGE DRAWING
+# DRAW GAUGE
 # =========================
 def draw():
     canvas.delete("all")
@@ -107,7 +109,7 @@ def draw():
     cx, cy = 200, 200
     r = 150
 
-    # circle
+    # outer circle
     canvas.create_oval(cx-r, cy-r, cx+r, cy+r, width=3)
 
     # center line
@@ -129,9 +131,9 @@ def draw():
     packets.config(text=f"PACKETS {packet_count}")
     health.config(text=f"MCP:{mcp} CAN:{can} ID:{can_id}")
 
-    # NO CAN warning
+    # NO SIGNAL WARNING
     if time.time() - last_rx > 1.0:
-        canvas.create_text(200, 350, text="NO CAN", font=("Arial", 18))
+        canvas.create_text(200, 350, text="NO SIGNAL", font=("Arial", 18), fill="red")
 
     root.after(50, draw)
 
@@ -140,7 +142,7 @@ def draw():
 # GUI SETUP
 # =========================
 root = tk.Tk()
-root.title("Steering CAN Dashboard")
+root.title("Steering CAN Dashboard (FINAL)")
 root.geometry("420x560")
 
 canvas = tk.Canvas(root, width=400, height=400)
@@ -166,7 +168,7 @@ status.pack()
 
 
 # =========================
-# START THREAD + LOOP
+# START THREAD
 # =========================
 threading.Thread(target=reader, daemon=True).start()
 
