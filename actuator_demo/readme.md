@@ -1,8 +1,4 @@
----
 
-# `README.md`
-
-````md
 # ESP32 Dual N25 EPS Controller (2-Loop Cascaded Velocity)
 
 A closed-loop EPS-style controller using:
