@@ -1,8 +1,0 @@
-✅ Features in This Version
-Calibration at start → automatically finds center & max torque.
-Smooth ramping → soft acceleration/deceleration like a PID without feedback.
-Keyboard control → Left/Right arrows steer.
-Emergency stop → ESC instantly sets torque to 0.
-Torque scaling live adjustment → + / - keys adjust strength on-the-fly.
-No oscillation → ramping prevents jerks or jumps.
-Driver can overpower wheel → torque only assists, doesn’t fight the driver.
