@@ -152,6 +152,44 @@ Important electrical note:
 - These pins do not provide internal pullups.
 - Use external pullup resistors on encoder channels.
 
+### 4.3.1 N25 6-Wire Motor/Encoder Wiring (per motor)
+
+Typical 6-wire N25 with encoder has:
+
+- 2 motor power wires (for brushed motor)
+- 4 encoder wires (`VCC`, `GND`, `A`, `B`)
+
+For this project (two motors):
+
+Motor 1:
+
+- Motor leads -> BTS7960 motor output pair (`M+`, `M-`)
+- Encoder `A` -> GPIO34
+- Encoder `B` -> GPIO35
+- Encoder `VCC` -> 3.3V (preferred for direct ESP32 IO compatibility)
+- Encoder `GND` -> GND
+
+Motor 2:
+
+- Motor leads -> same BTS7960 motor output pair in parallel with motor 1
+- Encoder `A` -> GPIO36
+- Encoder `B` -> GPIO39
+- Encoder `VCC` -> 3.3V (preferred)
+- Encoder `GND` -> GND
+
+If motor direction is opposite between the two motors:
+
+- swap the two motor power wires on one motor (or invert encoder phase mapping).
+
+### 4.3.2 Wire Color Warning
+
+N25 wire colors are not universal across vendors.
+
+- Do not trust color labels blindly.
+- Verify motor pair with a multimeter (low resistance pair = motor terminals).
+- Verify encoder supply and channels from vendor pinout/datasheet.
+- If encoder outputs are 5V push-pull, use level shifting/divider before ESP32 pins.
+
 ### 4.4 ESP32 <-> Engage Switch
 
 | Signal | ESP32 Pin | Notes |
