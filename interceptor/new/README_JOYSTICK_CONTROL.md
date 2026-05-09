@@ -1,0 +1,754 @@
+# Ocelot Interceptor Core — Joystick Control System
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [System Architecture](#system-architecture)
+3. [How the Interceptor Works (Hardware)](#how-the-interceptor-works-hardware)
+4. [CAN Protocol Specification](#can-protocol-specification)
+5. [Serial Protocol (PC ↔ ESP32)](#serial-protocol-pc--esp32)
+6. [ESP32 Firmware (`esp32_can_bridge.ino`)](#esp32-firmware-esp32_can_bridgeino)
+7. [Python UI (`test_interceptor_joystick.py`)](#python-ui-test_interceptor_joystickpy)
+8. [Safety Design](#safety-design)
+9. [Hardware Setup](#hardware-setup)
+10. [Calibration](#calibration)
+11. [First-Time Testing Procedure](#first-time-testing-procedure)
+12. [Troubleshooting](#troubleshooting)
+13. [Configuration Reference](#configuration-reference)
+
+---
+
+## Overview
+
+This system allows you to control a vehicle's Electric Power Steering (EPS) using a USB joystick connected to a PC. The PC runs a Python GUI that reads the joystick, and sends commands through an ESP32 which translates them into CAN bus packets for the Ocelot Interceptor Core.
+
+**Think of it as:** Joystick → PC → ESP32 → CAN Bus → Interceptor → EPS Motor
+
+### Components
+
+| Component | Role | File |
+|-----------|------|------|
+| Python UI | Reads joystick, displays telemetry, sends serial commands | `test_interceptor_joystick.py` |
+| ESP32 Bridge | Converts serial commands to CAN packets with CRC | `esp32_can_bridge.ino` |
+| Interceptor Core | STM32 firmware that controls EPS via DAC | `firmware/RetroPilot_Cores/interceptor_core/` |
+
+---
+
+## System Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                            YOUR PC                                       │
+│                                                                          │
+│  ┌──────────────┐     ┌─────────────────────────────────────────────┐   │
+│  │ USB Joystick │────▶│  test_interceptor_joystick.py (Python/Tk)  │   │
+│  │ (pygame)     │     │                                             │   │
+│  │              │     │  • Reads joystick X/Y axes                  │   │
+│  │ X = Steer    │     │  • EMA filter → Deadzone → Slew limit      │   │
+│  │ Y = Throttle │     │  • Simulates vehicle speed                  │   │
+│  └──────────────┘     │  • Shows telemetry from interceptor         │   │
+│                       │  • Sends: CMD,{mag},{speed},{enable}         │   │
+│                       └──────────────────┬──────────────────────────┘   │
+│                                          │ USB Serial (115200 baud)      │
+└──────────────────────────────────────────┼──────────────────────────────┘
+                                           │
+┌──────────────────────────────────────────┼──────────────────────────────┐
+│                         ESP32            │                               │
+│                                          ▼                               │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │  esp32_can_bridge.ino                                              │  │
+│  │                                                                    │  │
+│  │  • Parses serial CMD                                               │  │
+│  │  • Builds CAN packets with:                                        │  │
+│  │      - CRC8 checksum (poly 0x1D)                                   │  │
+│  │      - Rolling counter (0-15)                                      │  │
+│  │      - Enable bit (relay control)                                  │  │
+│  │      - Magnitude encoding (val0 - val1)                            │  │
+│  │  • Sends 0x300 (steer) and 0x76 (speed) at 50 Hz                  │  │
+│  │  • Receives 0x301 (telemetry) and forwards to PC                   │  │
+│  │  • Watchdog: zeros output if no serial for 200ms                   │  │
+│  └───────────────────────────────┬───────────────────────────────────┘  │
+│                                  │ SPI                                   │
+│  ┌───────────────────────────────┼───────────────────────────────────┐  │
+│  │  MCP2515 CAN Controller      │                                    │  │
+│  │  500 kbps, 8 MHz crystal     │                                    │  │
+│  └───────────────────────────────┼───────────────────────────────────┘  │
+│                                  │ CAN_H / CAN_L                        │
+└──────────────────────────────────┼──────────────────────────────────────┘
+                                   │
+                     ══════════════╪═══════════════  CAN BUS (500 kbps)
+                                   │
+┌──────────────────────────────────┼──────────────────────────────────────┐
+│            INTERCEPTOR CORE (STM32)                                      │
+│                                  │                                       │
+│  ┌───────────────────────────────┼───────────────────────────────────┐  │
+│  │  differential.h + main.c      │                                    │  │
+│  │                               ▼                                    │  │
+│  │  CAN RX:                                                           │  │
+│  │    0x300 → parse val0, val1, enable, counter, verify CRC           │  │
+│  │    0x76  → parse vehicle speed, verify CRC                         │  │
+│  │                                                                    │  │
+│  │  Processing:                                                       │  │
+│  │    magnitude = val0 - val1                                         │  │
+│  │    if |magnitude| > 400 → zero (safety)                           │  │
+│  │    scaled = magnitude × torque_lut[speed] / 100                   │  │
+│  │    dac0 = calibrated_center_0 - scaled                            │  │
+│  │    dac1 = calibrated_center_1 + scaled                            │  │
+│  │                                                                    │  │
+│  │  Relay (8 Hz safety timer):                                        │  │
+│  │    relay_on = (no_fault) AND (enable==1) AND (mode_configured)     │  │
+│  │                                                                    │  │
+│  │  CAN TX:                                                           │  │
+│  │    0x301 → ADC readings, override flag, fault state                │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+│                                                                          │
+│  ┌────────────────┐          ┌────────────────┐                         │
+│  │ ADC Input 0    │◀─── ─ ───│ Torque Sensor  │──── ─ ──▶ (bypass)     │
+│  │ ADC Input 1    │◀─── ─ ───│ (car's actual) │──── ─ ──▶ (bypass)     │
+│  └────────────────┘          └────────────────┘                         │
+│                                                                          │
+│  ┌────────────────┐          ┌────────────────┐                         │
+│  │ DAC Output 0   │─── ─ ───▶│ EPS ECU Input  │                        │
+│  │ DAC Output 1   │─── ─ ───▶│ (torque signal)│                        │
+│  └────────────────┘          └────────────────┘                         │
+│                                                                          │
+│  ┌────────────────┐                                                     │
+│  │ RELAY (GPIO B0)│─── Controls which signal reaches EPS:               │
+│  │ Active-low     │    OFF = car's sensor → EPS (normal)                │
+│  └────────────────┘    ON  = interceptor DAC → EPS (joystick control)   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## How the Interceptor Works (Hardware)
+
+### Physical Wiring
+
+The interceptor sits **between** the car's torque sensor and the EPS ECU:
+
+```
+Normal (relay OFF):
+  Torque Sensor ──────────────────────────────▶ EPS ECU
+  (driver turns wheel → sensor → EPS → motor assists)
+
+Interceptor Active (relay ON):
+  Torque Sensor ──▶ [ADC reads it] ──╳ (cut by relay)
+  Interceptor DAC ──────────────────────────────▶ EPS ECU
+  (joystick command → DAC → EPS → motor moves)
+```
+
+### What Happens When You Move the Joystick
+
+1. You push joystick right → UI calculates magnitude = +50
+2. UI sends `CMD,50,0,1\n` to ESP32
+3. ESP32 builds CAN packet: `[CRC, 0x19, 0x08, 0xE7, 0x07, 0x80]`
+   - val0 = 2048+25 = 2073 → bytes: 0x19, 0x08
+   - val1 = 2048-25 = 2023 → bytes: 0xE7, 0x07
+   - enable=1, counter=0 → 0x80
+4. Interceptor receives, checks CRC ✓, checks counter ✓
+5. magnitude = 2073 - 2023 = 50
+6. At 0 kph, scale = 100%, so scaled_torque = 50
+7. DAC0 = 1538 - 50 = 1488 (your calibrated center)
+8. DAC1 = 1579 + 50 = 1629 (your calibrated center)
+9. EPS ECU sees these voltages and applies steering assist
+
+### What Happens When You Let Go
+
+1. Joystick returns to center → magnitude ramps to 0 via slew limiter
+2. Eventually `CMD,0,0,1\n` → magnitude becomes 0
+3. DAC0 = 1538, DAC1 = 1579 (same as car's resting sensor values)
+4. EPS ECU sees "no torque request" → no steering assist
+
+### What Happens When You Disengage (Press E)
+
+1. UI sends `CMD,0,0,0\n` (enable=0)
+2. ESP32 sends 0x300 with enable bit = 0 and val0=val1=0
+3. Interceptor: `ctrl_enable = 0` → relay_on becomes false
+4. Relay opens → interceptor DAC disconnected → car's own sensor feeds EPS
+5. Car drives normally again
+
+---
+
+## CAN Protocol Specification
+
+### Steer Command (0x300) — ESP32 → Interceptor
+
+| Byte | Field | Description |
+|------|-------|-------------|
+| 0 | CRC8 | CRC of bytes[1..5], poly=0x1D, init=0xFF, xor_out=0xFF |
+| 1 | val0_lo | Low byte of val0 (16-bit little-endian) |
+| 2 | val0_hi | High byte of val0 |
+| 3 | val1_lo | Low byte of val1 (16-bit little-endian) |
+| 4 | val1_hi | High byte of val1 |
+| 5 | control | Bit 7: enable (1=relay ON), Bits 3:0: rolling counter |
+
+**DLC: 6 bytes** (not 8!)
+
+**Magnitude encoding:**
+```
+magnitude = desired steering force (-400 to +400)
+val0 = 2048 + magnitude / 2
+val1 = 2048 - (magnitude - magnitude / 2)
+```
+The firmware computes `magnitude = val0 - val1` and ignores absolute values.
+
+**Counter:** Must increment by exactly 1 from previous packet (0→1→...→15→0). Firmware verifies `(previous_counter + 1) & 0xF == new_counter`. Mismatched counter = packet silently dropped.
+
+**What the firmware does with it:**
+```c
+magnitude = val0 - val1;                   // extract steering force
+if (ABS(magnitude) > 400) magnitude = 0;   // SAFETY: reject excessive
+scale = torque_lut[vehicle_speed / 100];    // speed-dependent scaling
+dac0 = flash_center_0 - (magnitude * scale / 100);
+dac1 = flash_center_1 + (magnitude * scale / 100);
+```
+
+### Speed (0x76) — ESP32 → Interceptor
+
+| Byte | Field | Description |
+|------|-------|-------------|
+| 0 | CRC8 | CRC of bytes[1..7], poly=0x1D, init=0xFF, xor_out=0xFF |
+| 1-4 | unused | Always 0 |
+| 5 | speed_lo | Low byte of speed (kph × 100) |
+| 6 | speed_hi | High byte of speed (kph × 100) |
+| 7 | counter | Rolling counter (bits 3:0) |
+
+**DLC: 8 bytes**
+
+Example: 60 kph → speed_raw = 6000 → bytes[5]=0x70, bytes[6]=0x17
+
+**Purpose:** The firmware uses speed for the torque Look-Up Table:
+- 0 kph → 100% of magnitude allowed
+- 50 kph → 75%
+- 100 kph → 50%
+- >100 kph → 50% (clamped)
+
+**IMPORTANT:** You must send 0x76 continuously. If the interceptor doesn't receive it for 300 ticks (~0.4 seconds), it sets `FAULT_TIMEOUT_VSS` and disables.
+
+### Telemetry (0x301) — Interceptor → ESP32
+
+| Byte | Field | Description |
+|------|-------|-------------|
+| 0 | CRC8 | CRC of bytes[1..5], poly=0x1D |
+| 1 | adc0_lo | Torque sensor channel 0, low byte |
+| 2 | adc0_hi | Torque sensor channel 0, high byte |
+| 3 | adc1_lo | Torque sensor channel 1, low byte |
+| 4 | adc1_hi | Torque sensor channel 1, high byte |
+| 5 | override | 1 if driver physically fighting the steering |
+| 6 | reserved | Always 0 |
+| 7 | status | Upper nibble: fault code, Lower nibble: packet index |
+
+**DLC: 8 bytes**, sent at ~732 Hz
+
+---
+
+## Serial Protocol (PC ↔ ESP32)
+
+### PC → ESP32
+
+```
+CMD,{magnitude},{speed_kph},{enable}\n
+```
+
+| Field | Type | Range | Description |
+|-------|------|-------|-------------|
+| magnitude | int | -400 to +400 | Steering force (+ = right, - = left) |
+| speed_kph | int | 0 to 140 | Simulated vehicle speed |
+| enable | int | 0 or 1 | 0 = relay OFF (safe), 1 = relay ON (active) |
+
+```
+CAL\n
+```
+Trigger calibration. ESP32 responds with `[CAL] ACK`.
+
+### ESP32 → PC
+
+```
+TEL,{adc0},{adc1},{override},{fault},{counter},{relay}\n
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| adc0 | uint16 | Torque sensor channel 0 (0-4095) |
+| adc1 | uint16 | Torque sensor channel 1 (0-4095) |
+| override | 0/1 | Driver override detected |
+| fault | 0-15 | Interceptor fault code (0 = healthy) |
+| counter | 0-15 | Interceptor's output packet index |
+| relay | 0/1 | Derived: fault==0 AND enable==1 |
+
+---
+
+## ESP32 Firmware (`esp32_can_bridge.ino`)
+
+### Purpose
+Converts simple serial commands into properly-formatted CAN packets with CRC checksums and rolling counters that the interceptor firmware requires.
+
+### Key Design Decisions
+
+1. **Why not send raw CAN from PC?**
+   USB-to-CAN adapters exist, but the ESP32+MCP2515 gives us:
+   - Consistent 50 Hz timing (USB is bursty)
+   - CRC computation offloaded from PC
+   - Watchdog: ESP32 zeros output if PC disconnects
+   - No special drivers needed on PC side
+
+2. **Why separate counters for steer and speed?**
+   The interceptor tracks them independently. Using the same counter would cause silent packet drops on one channel.
+
+3. **Why use 2048 as base for encoding?**
+   The firmware only uses `val0 - val1` (the difference). The absolute values are irrelevant. 2048 is mid-range of 12-bit (0-4095) but the choice is arbitrary.
+
+### Dependencies
+- Arduino framework for ESP32
+- `mcp2515` library by autowp ([GitHub](https://github.com/autowp/arduino-mcp2515))
+
+### Flashing
+```bash
+# Using Arduino IDE:
+# 1. Board: "ESP32 Dev Module"
+# 2. Port: your ESP32's USB port
+# 3. Upload Speed: 921600
+
+# Using PlatformIO:
+pio run --target upload
+```
+
+---
+
+## Python UI (`test_interceptor_joystick.py`)
+
+### Purpose
+Provides a real-time graphical interface for controlling the interceptor via joystick or keyboard, with telemetry display and safety features.
+
+### Requirements
+```bash
+pip install pyserial pygame
+# tkinter is included with Python on most systems
+```
+
+### Running
+```bash
+cd tests/
+python3 test_interceptor_joystick.py
+```
+
+### Controls
+
+| Input | Action |
+|-------|--------|
+| Joystick X-axis | Steer left/right |
+| Joystick Y-axis | Accelerate (forward) / Brake (back) |
+| **E key** | **Toggle ENGAGE/DISENGAGE (relay on/off)** |
+| Up arrow | Increase speed (hold) |
+| Down arrow | Decrease speed (hold) |
+| C key | Send calibration command |
+| Q key | Quit |
+
+### GUI Elements
+
+| Label | What it shows |
+|-------|---------------|
+| ESP32 | Serial connection status (green = connected) |
+| Speed | Simulated vehicle speed in kph |
+| Mag | Magnitude sent + firmware scaling display |
+| [ENGAGED] / [DISENGAGED] | Current relay state + steer value |
+| Throttle | Current throttle input value |
+| ADC0 / ADC1 | Real-time torque sensor readings from car |
+| Override | Whether driver is physically turning the wheel |
+| Fault | Current fault state (NO_FAULT = healthy) |
+| Relay | Derived relay state |
+| Counter | Packet counter from interceptor |
+| TX / RX | Packets sent / received |
+| Steering bar | Visual indicator of current steer position |
+
+### Signal Processing Pipeline
+
+```
+Raw joystick (-1.0 to +1.0)
+    │
+    ▼
+EMA Low-Pass Filter (alpha=0.2)
+    │  Removes jitter/noise from cheap joysticks
+    │  filtered = 0.2 × current + 0.8 × previous
+    │
+    ▼
+Deadzone (5% for steer, 10% for throttle)
+    │  Eliminates drift when joystick is "centered"
+    │  Smooth ramp-in: no discontinuity at edge
+    │
+    ▼
+Scale to magnitude (× MAX_MAGNITUDE)
+    │  Maps 0..1 range to 0..100 (bench test limit)
+    │
+    ▼
+Slew Rate Limiter (max 20 units per 20ms tick)
+    │  Prevents instant jumps that could shock the EPS
+    │  Full travel 0→100 takes 100ms minimum
+    │
+    ▼
+Serial output: CMD,{mag},{speed},{enable}
+```
+
+### Speed Model
+
+The UI simulates vehicle speed so the interceptor's torque LUT works:
+
+| Action | Result |
+|--------|--------|
+| Throttle forward | Speed increases at 40 kph/s × throttle |
+| Throttle backward | Speed decreases at 60 kph/s × brake |
+| Throttle released | Speed coasts down at 5 kph/s (natural drag) |
+| Keyboard Up held | Speed increases at 20 kph/s |
+| Keyboard Down held | Speed decreases at 30 kph/s |
+| Key released | Speed coasts down |
+
+**Why simulate speed?** In bench testing, there's no real vehicle speed signal. The ESP32 sends this simulated speed on CAN 0x76 so the interceptor's torque LUT functions correctly. On a real vehicle, you would feed actual speed from OBD-II or wheel speed sensors.
+
+---
+
+## Safety Design
+
+### Layer 1: UI Watchdog
+If the serial write fails for 200ms, the UI zeros all outputs and ramps steer to 0 via slew limiter. Speed decelerates at 4× drag rate.
+
+### Layer 2: ESP32 Serial Watchdog
+If no `CMD` received for 200ms (PC crash, cable disconnect):
+- `cmd_steer = 0`
+- `cmd_speed = 0`
+- `cmd_enable = false` → ESP32 sends enable=0 → relay OFF
+
+### Layer 3: Interceptor CAN Timeout
+If no 0x300 for 700 ticks (~0.96 seconds):
+- `state = FAULT_TIMEOUT`
+- `ctrl_enable = 0`
+- Relay OFF → car drives normally
+
+### Layer 4: Interceptor VSS Timeout
+If no 0x76 for 300 ticks (~0.41 seconds):
+- `state = FAULT_TIMEOUT_VSS`
+- `vehicle_speed = 0`
+- `ctrl_enable = 0`
+- Relay OFF
+
+### Layer 5: Firmware Magnitude Limit
+If `|val0 - val1| > 400`:
+- `ctrl_magnitude = 0` → DAC outputs neutral center
+- (does NOT set a fault — just ignores the excessive value)
+
+### Layer 6: CRC Integrity Check
+Every CAN packet has CRC8. If checksum fails:
+- `state = FAULT_BAD_CHECKSUM`
+- Relay OFF
+
+### Layer 7: Counter Sequence Check
+Rolling counter must be exactly `(previous + 1) & 0xF`:
+- Mismatch → packet silently dropped (not a fault, but steer doesn't update)
+- Prevents replay attacks and delayed packet acceptance
+
+### Layer 8: Enable-with-zero Check
+If you send enable=0 but val0 or val1 are non-zero:
+- `state = FAULT_INVALID_CKSUM`
+- This prevents accidental engagement from corrupt packets
+
+### Layer 9: Driver Override Detection
+If `|adc0 - adc1| > override_threshold` (default 336):
+- `ctrl_override = 1` (reported on 0x301)
+- Override flag is informational — does NOT auto-disengage
+- Your application should disengage if the driver is fighting
+
+### Failure Cascade Example
+
+```
+PC application crashes
+    │
+    ├─ After 200ms: ESP32 watchdog fires → enable=0 sent
+    │       └─ Interceptor: ctrl_enable=0 → relay OFF → car normal
+    │
+    └─ After 960ms: Even if ESP32 watchdog failed
+            └─ Interceptor CAN timeout → FAULT → relay OFF → car normal
+```
+
+**You CANNOT get stuck in an active state.** Every layer independently disables the system.
+
+---
+
+## Hardware Setup
+
+### Bill of Materials
+
+| Item | Specification | Notes |
+|------|--------------|-------|
+| ESP32 DevKit | Any ESP32 board with USB | ESP32-WROOM, DevKitC, etc. |
+| MCP2515 module | 8 MHz crystal, 3.3V compatible | Common blue breakout boards |
+| CAN bus connection | CAN_H and CAN_L to vehicle bus | 120Ω termination if end-of-line |
+| USB cable | PC to ESP32 | Data cable, not charge-only! |
+| USB joystick | Any HID gamepad/joystick | Tested with Logitech F310 |
+
+### Wiring Diagram
+
+```
+ESP32                MCP2515 Module
+─────                ──────────────
+GPIO5  ──────────▶  CS
+GPIO18 ──────────▶  SCK
+GPIO19 ◀──────────  MISO (SO)
+GPIO23 ──────────▶  MOSI (SI)
+3.3V   ──────────▶  VCC
+GND    ──────────▶  GND
+                    INT (not used, leave floating)
+                    
+                    CAN_H ──────▶ Vehicle CAN bus high
+                    CAN_L ──────▶ Vehicle CAN bus low
+
+GPIO2  ──────────▶  LED (optional, through 220Ω resistor)
+```
+
+### CAN Bus Notes
+- Bus speed: **500 kbps** (standard automotive)
+- MCP2515 crystal: **8 MHz** (if your module has 16 MHz, change `MCP_8MHZ` to `MCP_16MHZ` in code)
+- Termination: if your MCP2515 module is at the physical end of the CAN bus, enable the 120Ω termination jumper
+
+---
+
+## Calibration
+
+### What Calibration Does
+
+The interceptor's DAC outputs need to match the car's actual torque sensor voltages at rest. If the DAC outputs 2048 (mid-range) but the car's sensor rests at 1538/1579, the EPS will see a "wrong" signal even with zero steer command.
+
+Calibration stores these center values in the interceptor's flash memory:
+- **ADC Channel 0 center:** 1538 (your measured value)
+- **ADC Channel 1 center:** 1579 (your measured value)
+
+### Your Calibration Data
+
+```
+ADC Channel 0: center=1538, tolerance=125, valid range: 1413-1663
+ADC Channel 1: center=1579, tolerance=100, valid range: 1479-1679
+```
+
+### How to Apply Calibration
+
+```bash
+cd /home/d/ocelot
+python3 stm_flash_config.py
+```
+
+1. Select Interceptor Core device
+2. Choose option 1 (Configure device)
+3. Configure ADC Channel 0:
+   - adc1 (center): 1538
+   - adc2: 0
+   - adc_tolerance: 125
+   - Enable: 1
+4. Run again, Configure ADC Channel 1:
+   - adc1 (center): 1579
+   - adc2: 0
+   - adc_tolerance: 100
+   - Enable: 1
+
+### Notes on Calibration
+- The **ESP32 does NOT need calibration** — it sends magnitude (difference) not absolute values
+- Only the **interceptor's flash** stores calibration (the centers for DAC output)
+- Tolerance values are for sensor fault detection: if ADC drifts beyond center±tolerance, the firmware sets `FAULT_SENSOR`
+
+---
+
+## First-Time Testing Procedure
+
+### Phase 1: Bench Test (No Vehicle)
+
+**Goal:** Verify the entire chain works without any vehicle connected.
+
+1. **Flash interceptor** with mode=DIFFERENTIAL and calibrated ADC values
+2. **Flash ESP32** with `esp32_can_bridge.ino`
+3. **Connect** ESP32's CAN to interceptor's CAN (directly, no vehicle)
+4. **Run UI:** `python3 tests/test_interceptor_joystick.py`
+5. **Check:** UI shows "ESP32: /dev/ttyUSBx" in green
+6. **Check:** Fault should show "NO_FAULT" (code 0)
+   - If "ADC_UNCONFIG" → flash config not written
+   - If "TIMEOUT" → CAN IDs mismatch or wiring issue
+   - If "BAD_CHECKSUM" → CRC implementation mismatch
+7. **DO NOT ENGAGE YET.** First verify telemetry is flowing (RX counter incrementing)
+8. **Press E** to engage. Relay label should show "ON"
+9. **Move joystick gently** — ADC values should NOT change (no load on bench)
+10. **Press E** again to disengage
+
+### Phase 2: Bench Test with Vehicle (Wheels Off Ground)
+
+**Goal:** Verify actual steering motor activation.
+
+1. **Jack up** the front of the vehicle (wheels free to turn)
+2. **Connect** ESP32 CAN to vehicle CAN bus (interceptor already in harness)
+3. **Start vehicle** (engine on for EPS power)
+4. **Run UI** and verify NO_FAULT
+5. **ENGAGE (press E)**
+6. **Gently push joystick** — wheels should turn
+7. **Verify direction:** right on joystick = wheels turn right
+   - If reversed: swap `+/-` in the ESP32's magnitude encoding or invert joystick axis
+8. **Test override:** physically turn the steering wheel — override flag should show
+9. **DISENGAGE immediately after testing**
+
+### Phase 3: Increase Magnitude Gradually
+
+```python
+# In test_interceptor_joystick.py, line 84:
+MAX_MAGNITUDE = 100   # Phase 2-3: gentle bench test
+MAX_MAGNITUDE = 200   # Phase 4: moderate force (parking speed)
+MAX_MAGNITUDE = 300   # Phase 5: near full force
+MAX_MAGNITUDE = 400   # Phase 6: maximum (firmware hard limit)
+```
+
+### Phase 4: On-Vehicle (Stationary)
+
+1. Vehicle on ground, engine running, parking brake on
+2. Run UI, verify NO_FAULT
+3. Set speed to 0 (or low) — torque LUT gives 100% at 0 kph
+4. Engage, gently push joystick — wheels should turn against ground resistance
+5. You'll need higher magnitude than wheels-off (maybe 150-200)
+
+---
+
+## Troubleshooting
+
+### Fault: TIMEOUT (code 5)
+**Meaning:** Interceptor hasn't received 0x300 for ~1 second
+
+**Causes:**
+- ESP32 not sending (check TX counter in UI)
+- Wrong CAN ID (must be 0x300)
+- CAN bus wiring issue (check CAN_H/CAN_L)
+- Wrong bus speed (must be 500 kbps)
+- Wrong MCP2515 crystal frequency setting
+
+### Fault: TIMEOUT_VSS (code 11)
+**Meaning:** Interceptor hasn't received 0x76 (speed) for 300 ticks
+
+**Causes:**
+- ESP32's `sendSpeed()` failing silently
+- Counter sequence mismatch on 0x76
+
+### Fault: BAD_CHECKSUM (code 6)
+**Meaning:** CRC8 in byte[0] doesn't match computed CRC of bytes[1..N-1]
+
+**Causes:**
+- CRC polynomial mismatch (must be 0x1D)
+- CRC computed over wrong byte range
+- Wrong init (must be 0xFF) or final XOR (must be 0xFF)
+- Byte order swapped
+
+### Fault: ADC_UNCONFIGURED (code 10)
+**Meaning:** Flash config doesn't have valid ADC calibration
+
+**Fix:** Run `stm_flash_config.py` and program ADC channels
+
+### Fault: INVALID_CKSUM (code 7)
+**Meaning:** Sent enable=0 but val0/val1 were non-zero
+
+**Cause:** The firmware requires exactly val0=0, val1=0 when enable=0. The old ESP32 code sent val0=2048, val1=2048 even during disengage (difference=0, but values were non-zero), triggering this fault.
+
+**Fix (already applied in esp32_can_bridge.ino):** Flash the current `esp32_can_bridge.ino` — it forces val0=0, val1=0 whenever enable=0. If you still see this fault, your ESP32 has not been reflashed with the fix.
+
+### Fault: SENSOR (code 2)
+**Meaning:** ADC reading outside calibrated range ± tolerance
+
+**Causes:**
+- Incorrect calibration values in flash
+- Torque sensor disconnected
+- Electrical noise on ADC lines
+
+### No telemetry (RX stays at 0)
+- Check if interceptor is powered
+- Verify 0x301 is being transmitted (use a CAN sniffer)
+- Check CAN bus termination
+- ESP32 might not be receiving — verify MISO wiring
+
+### UI shows "Searching..." for ESP32
+- Check USB cable (must be data cable)
+- Verify ESP32 appears in `ls /dev/ttyUSB*` or `ls /dev/ttyACM*`
+- Install drivers: CP210x, CH340, or FTDI depending on your board
+
+---
+
+## Configuration Reference
+
+### Python UI Constants
+
+| Constant | Default | Description |
+|----------|---------|-------------|
+| `MAX_MAGNITUDE` | 100 | Maximum steer magnitude sent (increase gradually) |
+| `MAX_STEER_STEP` | 20 | Max change per 20ms tick (slew rate) |
+| `MAX_SPEED` | 140.0 | Maximum simulated speed (kph) |
+| `STEER_DEADZONE` | 0.05 | 5% deadzone on steer axis |
+| `THROTTLE_DEADZONE` | 0.10 | 10% deadzone on throttle axis |
+| `STEER_FILTER_ALPHA` | 0.2 | EMA smoothing for steer (lower = smoother) |
+| `THROTTLE_FILTER_ALPHA` | 0.3 | EMA smoothing for throttle |
+| `SERIAL_WATCHDOG_MS` | 200 | Zero output if serial fails for this long |
+| `ACCEL_RATE` | 40.0 | Speed increase rate (kph/s at full throttle) |
+| `BRAKE_RATE` | 60.0 | Speed decrease rate (kph/s at full brake) |
+| `DRAG_RATE` | 5.0 | Natural coast-down rate (kph/s) |
+| `STEER_AXIS` | 0 | Joystick axis index for steering |
+| `THROTTLE_AXIS` | 1 | Joystick axis index for throttle |
+| `THROTTLE_INVERT` | True | Invert throttle axis direction |
+
+### ESP32 Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `MAX_MAGNITUDE` | 400 | Firmware hard limit (do not change) |
+| `MAX_SPEED_KPH` | 140 | Maximum speed value accepted |
+| `CMD_TIMEOUT_MS` | 200 | Serial watchdog timeout |
+| `CAN_STEER_INPUT` | 0x300 | CAN ID for steer commands |
+| `CAN_SPEED_INPUT` | 0x76 | CAN ID for speed signal |
+| `CAN_STEER_OUTPUT` | 0x301 | CAN ID for telemetry |
+
+### Firmware Fault Codes
+
+| Code | Name | Meaning | Recovery |
+|------|------|---------|----------|
+| 0 | NO_FAULT | System healthy | N/A |
+| 1 | STARTUP | Initial boot state | Wait for first valid packet |
+| 2 | SENSOR | ADC/DAC failure | Check wiring, recalibrate |
+| 3 | SEND_FAIL | CAN TX full | Usually transient |
+| 4 | SCE | Safety check error | Investigate firmware state |
+| 5 | TIMEOUT | No 0x300 for 700 ticks | Check CAN connection |
+| 6 | BAD_CHECKSUM | CRC mismatch | Fix CRC implementation |
+| 7 | INVALID_CKSUM | Values sent while disabled | Send val=0 when enable=0 |
+| 8 | REQ_TOO_HIGH | Magnitude > 400 | Reduce steer command |
+| 9 | REQ_INVALID | Bad request format | Check packet encoding |
+| 10 | ADC_UNCONFIG | No flash calibration | Run stm_flash_config.py |
+| 11 | TIMEOUT_VSS | No 0x76 for 300 ticks | Check speed packet sending |
+
+### Torque LUT (Speed-based Scaling)
+
+| Speed (kph) | Scale % | Effect on mag=100 |
+|-------------|---------|-------------------|
+| 0 | 100% | → 100 |
+| 20 | 90% | → 90 |
+| 40 | 80% | → 80 |
+| 60 | 70% | → 70 |
+| 80 | 60% | → 60 |
+| 100 | 50% | → 50 |
+| 120 | 50% | → 50 (clamped) |
+| 140 | 50% | → 50 (clamped) |
+
+---
+
+## File Locations
+
+```
+ocelot/
+├── tests/
+│   ├── test_interceptor_joystick.py    ← Python UI (this system)
+│   ├── esp32_can_bridge.ino            ← ESP32 firmware (this system)
+│   └── README_JOYSTICK_CONTROL.md      ← This document
+├── firmware/
+│   └── RetroPilot_Cores/
+│       └── interceptor_core/
+│           ├── main.c                  ← Main firmware (relay logic, timers)
+│           └── modes/
+│               ├── common.h            ← CAN addresses, fault codes, globals
+│               └── differential.h      ← Steer processing, CAN RX/TX, DAC output
+├── stm_flash_config.py                 ← Tool to program calibration into flash
+```
