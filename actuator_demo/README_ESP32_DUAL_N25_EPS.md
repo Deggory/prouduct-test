@@ -99,22 +99,40 @@ Byte map:
 - Final XOR: `0xFF`
 - Covers bytes `1..N-1` (CRC stored at byte 0)
 
-## 4. Pin Map
+## 4. Pin Map and Wiring
 
-### 4.1 MCP2515
+### 4.1 ESP32 <-> MCP2515
 
-- CS: GPIO5
-- INT: GPIO15
-- SPI SCK: GPIO18
-- SPI MISO: GPIO19
-- SPI MOSI: GPIO23
+| MCP2515 Pin | ESP32 Pin | Notes |
+|---|---|---|
+| VCC | 5V | Module logic supply (board-dependent; many MCP2515 modules are 5V-powered) |
+| GND | GND | Common ground required |
+| CS | GPIO5 | SPI chip select |
+| INT | GPIO15 | Interrupt output from MCP2515 |
+| SCK | GPIO18 | SPI clock |
+| MISO | GPIO19 | SPI MISO |
+| MOSI | GPIO23 | SPI MOSI |
+| CANH | CAN bus H | To EPS CAN network |
+| CANL | CAN bus L | To EPS CAN network |
 
-### 4.2 BTS7960 (single board)
+### 4.2 ESP32 <-> BTS7960 (single board)
 
-- RPWM: GPIO25
-- LPWM: GPIO26
-- R_EN: GPIO27
-- L_EN: GPIO14
+| BTS7960 Pin | ESP32 Pin | Notes |
+|---|---|---|
+| RPWM | GPIO25 | Right-side PWM command |
+| LPWM | GPIO26 | Left-side PWM command |
+| R_EN | GPIO27 | Right-side enable (driven HIGH in firmware) |
+| L_EN | GPIO14 | Left-side enable (driven HIGH in firmware) |
+| VCC | 5V | Logic supply for BTS board |
+| GND | GND | Must share ground with ESP32 and motor supply |
+| B+ | Motor battery +12V | High-current motor supply, not ESP32 5V |
+| B- | Motor battery GND | High-current return path |
+
+Enable behavior in code:
+
+- `R_EN` (GPIO27) is set `HIGH` at startup.
+- `L_EN` (GPIO14) is set `HIGH` at startup.
+- Assist is controlled by PWM command and safety logic; enable pins stay asserted unless firmware is changed.
 
 ### 4.3 Encoders
 
@@ -134,10 +152,71 @@ Important electrical note:
 - These pins do not provide internal pullups.
 - Use external pullup resistors on encoder channels.
 
-### 4.4 Engage Switch
+### 4.4 ESP32 <-> Engage Switch
 
-- Engage input: GPIO4 (configured `INPUT_PULLUP`)
-- Logic: active-low (`LOW` means engaged)
+| Signal | ESP32 Pin | Notes |
+|---|---|---|
+| Engage switch input | GPIO4 | Configured as `INPUT_PULLUP`, active-low |
+
+Logic:
+
+- Switch open -> GPIO4 reads HIGH -> disengaged state
+- Switch closed to GND -> GPIO4 reads LOW -> engaged state
+
+### 4.5 Quick Bench Wiring Diagram
+
+```text
+                    USB
+PC  --------------------------------->  ESP32 Dev Module
+                                           |  |  |  |
+                                           |  |  |  +-- GPIO4  <--- Engage switch ---> GND
+                                           |  |  |
+                                           |  |  +----- SPI -----> MCP2515
+                                           |  |          GPIO5  -> CS
+                                           |  |          GPIO18 -> SCK
+                                           |  |          GPIO19 -> MISO
+                                           |  |          GPIO23 -> MOSI
+                                           |  |          GPIO15 <- INT
+                                           |  |
+                                           |  +------------> BTS7960 logic
+                                           |               GPIO25 -> RPWM
+                                           |               GPIO26 -> LPWM
+                                           |               GPIO27 -> R_EN
+                                           |               GPIO14 -> L_EN
+                                           |
+                      Encoder 1 ---------> GPIO34 (A), GPIO35 (B)
+                      Encoder 2 ---------> GPIO36 (A), GPIO39 (B)
+
+Motor Power Path (separate from ESP32 USB power):
+
+12V Battery +  -------------------------> BTS7960 B+
+12V Battery -  -------------------------> BTS7960 B-
+Battery - / Power GND ------------------> ESP32 GND
+Battery - / Power GND ------------------> MCP2515 GND
+
+CAN Bus:
+MCP2515 CANH ---------------------------> CANH network
+MCP2515 CANL ---------------------------> CANL network
+```
+
+Important:
+
+- Do not power motor stage from ESP32 5V.
+- Use a fused 12V motor supply sized for startup current.
+- Ensure all grounds are common before sending PWM.
+
+### 4.6 First Power-On Sequence (Bench)
+
+1. Leave engage switch open (disengaged).
+2. Power ESP32 by USB first and verify serial output starts.
+3. Power MCP2515 logic and confirm CAN transceiver is alive.
+4. Power BTS7960 motor supply last.
+5. Verify neutral output at startup (no wheel movement).
+6. Send known CAN command stream on 0x22E.
+7. Confirm state transitions from startup/timeout to no-fault.
+8. Close engage switch only after command stream is stable.
+9. Increase torque commands gradually while monitoring encoder mismatch.
+10. If any unexpected movement occurs, open engage switch and remove motor power.
 
 ## 5. Controller Design
 
