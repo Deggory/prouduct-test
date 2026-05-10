@@ -7,25 +7,37 @@
 
 ---
 
+## Instructions for AI Assistants Implementing This Guide
+
+> **READ THIS BEFORE MAKING ANY CHANGES.**
+>
+> **Rule: Ask the user before every step. Do not implement multiple steps at once.**
+>
+> For each step below, follow this exact workflow:
+> 1. Tell the user what you are about to do and which file will change
+> 2. Ask: *"Shall I proceed with this step?"*
+> 3. Wait for confirmation before making any edits
+> 4. After completing the step, confirm it is done and ask: *"Ready for the next step?"*
+>
+> **Never skip ahead. Never batch steps. One step at a time.**
+
+---
+
 ## Implementation Status
 
-> **If you are an AI assistant asked to implement this guide:** Read the status below first.
-> All code changes are already applied. Only the RKNN model files are missing (user converts them manually).
+| Step | What | File | Status |
+|------|------|------|--------|
+| Step 1 | Convert ONNX → RKNN models on a PC | `selfdrive/modeld/models/*.rknn` | ⏳ **User must do this manually** |
+| Step 2 | Create RKNN runner | `selfdrive/modeld/runners/rknn_runner.py` | ✅ Already in repo |
+| Step 3 | Patch inference loop | `selfdrive/modeld/modeld.py` | ✅ Already in repo |
+| Step 4 | Set camera env vars + auto-detect | `launch_chffrplus.sh` | ✅ Already in repo |
+| Step 5 | Skip tinygrad build when RKNN present | `selfdrive/modeld/SConscript` | ✅ Already in repo |
+| Step 6 | Show NPU timing in UI (top-right) | `selfdrive/ui/qt/onroad/annotated_camera.cc` | ✅ Already in repo |
+| Step 7 | Build | run `scons -j$(nproc)` | ⏳ Run after Step 1 |
+| Step 8 | Run and verify | run `sudo bash launch_openpilot.sh` | ⏳ Run after Step 7 |
 
-| Step | What | Status |
-|------|------|--------|
-| Step 1 | Convert ONNX → RKNN models on a PC | ⏳ **User must do this** — see Step 1 |
-| Step 2 | Create `selfdrive/modeld/runners/rknn_runner.py` | ✅ **Already in repo** |
-| Step 3 | Edit `selfdrive/modeld/modeld.py` | ✅ **Already in repo** |
-| Step 4 | Edit `launch_chffrplus.sh` | ✅ **Already in repo** |
-| Step 5 | Edit `selfdrive/modeld/SConscript` | ✅ **Already in repo** |
-| Step 6 | `scons -j$(nproc)` build | ⏳ Run after Step 1 |
-| Step 7 | Run and verify | ⏳ Run after Step 6 |
-
-**The only thing left to do is Step 1 (model conversion on a PC), then Steps 6–7.**
-
-> **If an AI is re-implementing this from scratch** (e.g. the repo was reset), use the code blocks
-> in Steps 2–5 below exactly as written. Every code block is complete and ready to apply.
+> **If re-implementing from scratch** (repo was reset): every step has exact Find/Replace blocks below.
+> Ask the user before each one.
 
 ---
 
@@ -1121,23 +1133,29 @@ At 27ms end-to-end you are already inside the 30ms target. This optimisation wou
 
 ## Summary of All File Changes
 
-> **For AI implementation:** Steps 2–5 code is fully written in this guide. Apply each code block exactly as shown. Step 1 (model files) must be done by the user on a separate PC.
+> **For AI implementation — IMPORTANT:**
+> - Apply steps **one at a time**
+> - Before each step, tell the user what file you are about to change and ask: *"Shall I proceed?"*
+> - Wait for a yes before making any edit
+> - After each step, confirm it is done and ask: *"Ready for the next step?"*
+> - Step 1 (model files) cannot be done by AI — the user must convert on a PC
 
 ### Files to Create
 
-| File | What | How |
-|------|------|-----|
-| `selfdrive/modeld/runners/rknn_runner.py` | RKNN wrapper class | Code in Step 2 — create this file |
-| `selfdrive/modeld/models/driving_vision.rknn` | Vision RKNN model | User converts from ONNX on PC (Step 1) |
-| `selfdrive/modeld/models/driving_policy.rknn` | Policy RKNN model | User converts from ONNX on PC (Step 1) |
+| File | What | AI action |
+|------|------|-----------|
+| `selfdrive/modeld/runners/rknn_runner.py` | RKNN wrapper class | Create — code in Step 2 |
+| `selfdrive/modeld/models/driving_vision.rknn` | Vision RKNN model | **Skip — user does this on PC** |
+| `selfdrive/modeld/models/driving_policy.rknn` | Policy RKNN model | **Skip — user does this on PC** |
 
 ### Files to Edit
 
 | File | Change | Code in |
 |------|--------|---------|
-| `selfdrive/modeld/modeld.py` | Add RKNN inference path, A76 pinning, SCHED_FIFO | Step 3 (changes 3a–3e) |
+| `selfdrive/modeld/modeld.py` | RKNN inference path, A76 pinning, SCHED_FIFO | Step 3 (changes 3a–3e) |
 | `selfdrive/modeld/SConscript` | Skip tinygrad compile when RKNN present | Step 5 |
-| `launch_chffrplus.sh` | Add USE_WEBCAM=1, NO_DM=1, ROAD_CAM=11 | Step 4a |
+| `launch_chffrplus.sh` | USE_WEBCAM=1, NO_DM=1, ROAD_CAM auto-detect | Step 4a |
+| `selfdrive/ui/qt/onroad/annotated_camera.cc` | NPU timing overlay top-right | Step 6 |
 
 ### Files That Need NO Changes
 
@@ -1205,6 +1223,114 @@ At 27ms end-to-end you are already inside the 30ms target. This optimisation wou
 4. **Policy input ordering** — RKNN requires inputs as a list in the exact order they appear in the ONNX model graph. The `policy_input_shapes` dict (from metadata) preserves this order. The list comprehension `[self.numpy_inputs[key] for key in self.policy_input_shapes.keys()]` is order-correct.
 
 5. **NPU Core 0 is exclusive** — `RKNNLite.NPU_CORE_0` pins the vision model to Core 0 alone. If another daemon (e.g., `dmonitoringmodeld`) also uses the NPU, make sure it uses Core 2 (`RKNNLite.NPU_CORE_2`), not Core 0 or Core 1, to avoid contention.
+
+---
+
+## Dashcam Mode and Showing NPU Inference Speed on Screen
+
+### What is dashcam mode?
+
+Dashcam mode means openpilot **records video and runs the AI vision model but does NOT control the car**. The steering, brakes, and throttle are untouched. It is exactly like a dashcam — watching, logging, but not acting.
+
+On Orange Pi 5 without a real car connected via panda, the system automatically enters dashcam mode because:
+- `CP.passive = True` (no car controller available)
+- `selfdrived.py` adds the `dashcamMode` event
+- The HUD shows "Dashcam Mode" text permanently
+- All AI inference (vision + policy) still runs at full speed — nothing is skipped
+
+**You do not need to do anything special to enable dashcam mode.** Without a panda and car, it is the default.
+
+---
+
+### Does the processing speed (ms) show on screen?
+
+**No — not by default.**
+
+`modeld.py` publishes `modelExecutionTime` in the `modelV2` message every frame (`fill_model_msg.py` line 82). But the UI (`selfdrive/ui/qt/onroad/`) reads `modelV2` only for drawing the path lines and lane lines — it never reads `modelExecutionTime` and never displays it on screen.
+
+The HUD (`hud.cc`) only draws: vehicle speed, set speed, and alerts. No inference time.
+
+---
+
+### How to show NPU inference speed on the HUD — Step 6
+
+> **For AI:** Before making this change, tell the user:
+> *"Step 6: I will add an NPU timing overlay (top-right corner) to `selfdrive/ui/qt/onroad/annotated_camera.cc`. This change is already applied. Shall I verify it or move on?"*
+
+**File:** `selfdrive/ui/qt/onroad/annotated_camera.cc`
+
+**Find** (near the bottom of `paintGL()`):
+```cpp
+  double fps = fps_filter.update(1. / dt * 1000);
+  if (fps < 15) {
+    LOGW("slow frame rate: %.2f fps", fps);
+  }
+  prev_draw_t = cur_draw_t;
+```
+
+**Replace with:**
+```cpp
+  double fps = fps_filter.update(1. / dt * 1000);
+  if (fps < 15) {
+    LOGW("slow frame rate: %.2f fps", fps);
+  }
+  prev_draw_t = cur_draw_t;
+
+  // NPU inference time overlay — top-right corner
+  if (sm.updated("modelV2")) {
+    float exec_ms = sm["modelV2"].getModelV2().getModelExecutionTime() * 1000.0f;
+    float drop_pct = sm["modelV2"].getModelV2().getFrameDropPerc() * 100.0f;
+    QString npu_text = QString("NPU: %1 ms  drop: %2%")
+                         .arg(exec_ms, 0, 'f', 1)
+                         .arg(drop_pct, 0, 'f', 1);
+    painter.save();
+    painter.setPen(QColor(255, 255, 255, 220));
+    painter.setFont(QFont("Inter", 24, QFont::Bold));
+    painter.drawText(rect().adjusted(0, 16, -16, 0), Qt::AlignTop | Qt::AlignRight, npu_text);
+    painter.restore();
+  }
+```
+
+> Note: `sm` and `painter` are already in scope inside `paintGL()`. `modelV2` is already subscribed in `ui.cc` and passed down — no extra subscription needed.
+
+**What you will see on screen (top-right corner):**
+```
+NPU: 15.2 ms  drop: 0.0%
+```
+- `NPU: 15.2 ms` = vision (~10ms) + policy (~5ms) combined
+- `drop: 0.0%` = no frames missed — AI keeping up perfectly
+
+---
+
+### Full timing breakdown visible without code changes
+
+If you prefer not to modify the UI, you can read the timing live from the terminal at any time:
+
+```bash
+# Run this in a second terminal while the system is running
+python3 - << 'EOF'
+import cereal.messaging as messaging
+import time
+
+sm = messaging.SubMaster(['modelV2'])
+while True:
+    sm.update(100)
+    if sm.updated['modelV2']:
+        ms = sm['modelV2'].modelExecutionTime * 1000
+        drop = sm['modelV2'].frameDropPerc
+        print(f"NPU inference: {ms:.1f} ms  |  frame drop: {drop:.1f}%")
+    time.sleep(0.05)
+EOF
+```
+
+Expected output when RKNN is running:
+```
+NPU inference: 15.2 ms  |  frame drop: 0.0%
+NPU inference: 14.8 ms  |  frame drop: 0.0%
+NPU inference: 15.1 ms  |  frame drop: 0.0%
+```
+
+If you see values above 30ms, the RKNN path is not active — check `/dev/rknpu0` exists and `.rknn` model files are in `selfdrive/modeld/models/`.
 
 ---
 
@@ -1345,3 +1471,197 @@ The file to edit is `selfdrive/modeld/runners/rknn_runner.py`. Apply:
 5. Change `infer()` to accept dict or list
 6. Change `assert` → `raise RuntimeError` / `raise FileNotFoundError`
 7. Update `modeld.py` Change 3c to use `use_npu_cores="0"` and `use_npu_cores="1"` instead of `npu_core=RKNNLite.NPU_CORE_0/1`, and remove the `from rknnlite.api import RKNNLite` import from modeld.py (no longer needed directly).
+
+---
+
+## Stability & Safety Gaps (Reference)
+
+Things that need fixing for a production-stable system. Listed by priority.
+
+---
+
+### Critical — can cause dangerous behavior
+
+**1. `assert` in `rknn_runner.py` can be silently disabled**
+Python's `-O` flag disables all `assert` statements. If `self.rknn.run()` fails, the assert passes silently, `outputs_get()` returns `None`, and `vision_rknn_outputs[0].flatten()` crashes with a `TypeError` — modeld dies hard. Panda disengages (safe), but it is a crash not a graceful shutdown.
+Fix: replace every `assert ret == 0` with `raise RuntimeError(...)`.
+
+**2. No NaN/Inf check on NPU outputs**
+After `vision_rknn_outputs[0].flatten().astype(np.float32)`, there is no `np.isfinite()` check. If the NPU returns garbage (thermal throttle, driver bug), the trajectory planner gets corrupted values → car tries to execute a garbage steering command. Panda safety catches extreme values but anything within the panda envelope goes through.
+Fix: add `if not np.all(np.isfinite(self.vision_output)): raise RuntimeError("vision output contains NaN/Inf")` after each `.flatten()`.
+
+**3. `outputs_get()` can return `None`**
+RKNNLite can return `None` from `outputs_get()` even when `run()` returns 0. Then `vision_rknn_outputs[0]` raises `TypeError` and modeld crashes.
+Fix: add `if vision_rknn_outputs is None: raise RuntimeError("RKNN outputs_get returned None")` before indexing.
+
+---
+
+### High — causes instability / hard crashes
+
+**4. NPU inference has no timeout**
+`self.rknn.run()` blocks forever if the NPU locks up. The rknpu.ko driver on RK3588S has documented hangs under thermal stress. modeld blocks → panda heartbeat times out → panda disengages (safe), but the system never recovers. Needs a reboot.
+Fix: run inference in a thread with a `threading.Timer` watchdog, or use `signal.alarm`.
+
+**5. Policy input order is not guaranteed**
+`self.policy_input_shapes.keys()` is insertion-ordered in Python 3.7+ but the RKNN model was compiled from ONNX, which has its own input ordering. If the dict was built in a different order than the ONNX model expects, every policy inference silently feeds wrong inputs → garbage trajectory every frame.
+Fix: at startup, print both the dict key order and the RKNN model's expected input names and confirm they match.
+
+**6. `release()` is never called on shutdown**
+`RKNNRunner.release()` exists but nothing calls it. On abnormal restart (manager restarts modeld), the previous NPU session may not be fully freed → `init_runtime()` on the new instance returns error → both runners fail → modeld crashes in a restart loop.
+Fix: call `release()` via `atexit.register()` or a `try/finally` block in `main()`.
+
+**7. Camera disconnect is not handled**
+If the IMX415 CSI cable vibrates loose, `cv2.VideoCapture.read()` returns `(False, None)`. Camerad likely dies and modeld starts receiving stale frames — silently running on old data.
+Fix: check whether `camera.py` reconnects on failure; if not, add a retry loop.
+
+---
+
+### Medium — reliability and operational
+
+**8. Thermal throttling with no warning**
+At 90°C+ (common under load with no heatsink), the kernel throttles the NPU. A 10ms inference becomes 40–80ms. Frame drop climbs. The only visibility is the UI overlay. There is no alert or automatic fan control.
+Fix: heatsink + fan is required. Optionally add a thermal log warning when `modelExecutionTime > 0.025`.
+
+**9. A76 core numbering may differ by kernel**
+The code pins to `{4, 5, 6, 7}`. On some RK3588S kernels the big cores are 0–3 instead.
+Verify: `cat /sys/devices/system/cpu/cpu{4..7}/cpufreq/cpuinfo_max_freq` — all should show `2400000`. If not, you are pinning to the little cores and getting A55 speeds.
+
+**10. `/dev/rknpu0` may be named `/dev/rknpu`**
+Some vendor kernels expose `/dev/rknpu` without the `0`. If so, `USE_RKNN = False` silently, tinygrad loads, and you wonder why it is slow.
+Fix: change the check to `any(os.path.exists(p) for p in ['/dev/rknpu0', '/dev/rknpu'])`.
+
+**11. No `__del__` guard in `RKNNRunner`**
+If the constructor fails between `RKNNLite()` and `load_rknn()`, `self.rknn` is set but `release()` is never called in any destructor. The NPU device file may stay partially open.
+
+---
+
+### Fix priority order
+
+| # | Fix |
+|---|-----|
+| 1 | Replace all `assert` with `raise RuntimeError` in `rknn_runner.py` |
+| 2 | Add null check on `outputs_get()` before indexing |
+| 3 | Add `np.isfinite()` guard on both model outputs before parsing |
+| 4 | Verify policy input key order matches RKNN model input order at startup |
+| 5 | Call `release()` at modeld shutdown (`atexit` or `try/finally`) |
+| 6 | Check camera reconnect behavior in `camera.py` |
+| 7 | Verify A76 core numbering: `cat /sys/.../cpu{4..7}/cpufreq/cpuinfo_max_freq` |
+| 8 | Heatsink + fan — required for sustained NPU performance |
+| 9 | Broaden `/dev/rknpu0` check to also match `/dev/rknpu` |
+
+---
+
+## Remaining Gaps After Stability Fixes
+
+Things to address after the stability fixes above are applied.
+
+---
+
+### 1. `rknn-toolkit-lite2` is not in any dependency file
+
+`pyproject.toml` lists every package the project needs, but `rknn-toolkit-lite2` is absent.
+It is also **not on PyPI** — Rockchip distributes it as a wheel from their SDK repo.
+On a fresh install, `import rknnlite` fails at modeld startup. The `USE_RKNN` check runs
+before the import, so modeld crashes rather than falling back to tinygrad.
+
+**Manual install required on the Orange Pi before first run:**
+
+```bash
+# Download from: https://github.com/airockchip/rknn-toolkit2/tree/master/rknn-toolkit-lite2/packages
+pip install rknn_toolkit_lite2-2.x.x-cp311-cp311-linux_aarch64.whl
+```
+
+Replace `2.x.x` with the latest version for Python 3.11 aarch64.
+Cannot be added to `pyproject.toml` automatically — it is not on PyPI.
+
+---
+
+### 2. Camera has no reconnect on disconnect
+
+In `tools/webcam/camera.py`, `CameraMJPG.read_frames()`:
+
+```python
+while True:
+    ret, frame = self.cap.read()
+    if not ret:
+        break   # generator exits, cap released, done
+```
+
+When `ret=False` (CSI cable vibration, RKISP device reset, thermal shutdown), the generator
+ends and camerad dies. Manager restarts camerad after a few seconds, but during that window
+modeld runs on stale frames from the vision IPC buffer — silently, with no alert.
+
+On a USB webcam this is tolerable. On a CSI camera in a car with vibration, it will happen.
+
+**Fix needed before production use:** add a retry loop in `read_frames()` that attempts to
+reopen `cv2.VideoCapture(camera_id)` a few times before giving up.
+
+---
+
+### 3. `CameraMJPG` requests MJPG format but RKISP outputs NV12
+
+`_configure_camera_format("MJPG")` calls `cap.set(cv2.CAP_PROP_FOURCC, ...)` for MJPG.
+The RKISP V4L2 device (`rkisp_mainpath`) outputs NV12 natively and silently ignores the
+FOURCC request. OpenCV then internally converts NV12 → BGR, and `_bgr_to_nv12` converts
+it back. Functionally correct — but wastes ~3ms per frame (the double-conversion already
+documented in the BGR→NV12 section).
+
+**This is not a bug — it is already accounted for in the 27ms timing budget.**
+Fixing it requires bypassing OpenCV and reading V4L2 buffers directly (out of scope now).
+
+---
+
+### Summary — what to do after stability fixes
+
+| What | Action needed |
+|------|---------------|
+| `rknn-toolkit-lite2` missing from deps | Manual `pip install` on Orange Pi before first run |
+| Camera no reconnect | Add retry loop in `read_frames()` before production use |
+| MJPG format ignored by RKISP | Nothing to fix — ~3ms overhead already in 27ms budget |
+
+---
+
+## Auto-Launch on Boot (Orange Pi 5)
+
+Three scripts in `scripts/` handle automatic startup when the Orange Pi powers on.
+
+### Files created
+
+| File | Purpose |
+|------|---------|
+| `scripts/sunnypilot-autostart.sh` | Waits for NPU + camera, activates venv, runs `launch_openpilot.sh` |
+| `scripts/sunnypilot.service` | systemd unit — restarts on crash, does not restart on clean exit |
+| `scripts/install-autostart.sh` | One-time install/uninstall helper |
+
+### What the autostart script does
+
+1. Waits up to 30s for `/dev/rknpu0` (or `/dev/rknpu`) — handles slow NPU driver init on boot
+2. Waits up to 30s for `rkisp_mainpath` to appear in sysfs — handles slow MIPI CSI probe
+3. Activates venv at `/home/d/.venv`
+4. Runs `sudo bash launch_openpilot.sh`
+
+All output is logged to `/var/log/sunnypilot-autostart.log`.
+
+### Install (run once on the Orange Pi)
+
+```bash
+cd /home/d/sunnypilot-pc
+bash scripts/install-autostart.sh
+```
+
+This copies the service file to `/etc/systemd/system/sunnypilot.service` and enables it.
+
+### Useful commands after install
+
+```bash
+sudo systemctl start sunnypilot      # start now without rebooting
+sudo systemctl stop sunnypilot       # stop it
+sudo systemctl status sunnypilot     # check if running / last exit code
+journalctl -u sunnypilot -f          # live log output
+```
+
+### Uninstall
+
+```bash
+bash scripts/install-autostart.sh --remove
+```
