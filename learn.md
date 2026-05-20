@@ -111,11 +111,13 @@ The `system/` folder provides the core platform abstraction, process management,
 This is your **complete, actionable knowledge base** for porting or validating any OpenPilot-based repo to the Orange Pi 5 (RK3588). It includes code snippets, config examples, and automation patterns for every critical step.
 
 
-## 🟦 BlackPanda CAN Integration (Orange Pi 5)
 
-**BlackPanda** is the required CAN interface for Orange Pi 5. All CAN communication between OpenPilot and your car is routed through BlackPanda using SocketCAN. This replaces all other safety modules and CAN bridges.
+## 🟦 Panda CAN Integration (Orange Pi 5)
 
-### Minimal Daemon/Process List (Orange Pi 5 + BlackPanda)
+**Panda** (comma.ai's original CAN interface) is the required CAN hardware for Orange Pi 5. All CAN communication between OpenPilot and your car is routed through Panda using the pandad process. This replaces all other safety modules and CAN bridges.
+
+
+### Minimal Daemon/Process List (Orange Pi 5 + Panda)
 
 - `camerad` (IMX415 front camera only)
 - `modeld` (driving_vision.rknn, driving_policy.rknn only)
@@ -123,7 +125,8 @@ This is your **complete, actionable knowledge base** for porting or validating a
 - `plannerd` (path/long planner)
 - `radard` (lead/radar logic)
 - `card` (car interface, CAN parsing/actuation)
-- `socketd` (CAN bridge for BlackPanda)
+- `pandad` (CAN bridge for Panda)
+
 
 **Do not run:**
 - Any ELM327, side radar, or unused car integrations
@@ -131,45 +134,47 @@ This is your **complete, actionable knowledge base** for porting or validating a
 - Any camera except IMX415 front
 - Any model except driving_vision.rknn and driving_policy.rknn
 
-### BlackPanda CAN Integration Steps
 
-1. **Enable `socketd` and `card` daemons:**
-	- `selfdrive/socketd/socketd.py` — CAN bridge daemon. Proxies CAN messages between Orange Pi 5 and BlackPanda via SocketCAN.
-	- `selfdrive/car/card.py` — Main car interface. Handles CAN parsing, actuator commands, and communication with BlackPanda.
-	- Only keep your car’s interface and CAN parser in `selfdrive/car/`.
+### Panda CAN Integration Steps
+
+1. **Enable `pandad` and `card` daemons:**
+	 - `selfdrive/pandad/pandad.py` — CAN bridge daemon. Proxies CAN messages between Orange Pi 5 and Panda via USB.
+	 - `selfdrive/car/card.py` — Main car interface. Handles CAN parsing, actuator commands, and communication with Panda.
+	 - Only keep your car’s interface and CAN parser in `selfdrive/car/`.
 
 2. **Remove all ELM327, side radar, and unused car integrations.**
 
 3. **Ensure only IMX415 front camera is enabled in `camerad`.**
 
-4. **All safety logic is handled by BlackPanda firmware and OpenPilot safety hooks.**
+4. **All safety logic is handled by Panda firmware and OpenPilot safety hooks.**
 
 5. **Messaging:**
-	- Keep all Cap'n Proto messaging (`cereal/`), and `msgq` for IPC.
+	 - Keep all Cap'n Proto messaging (`cereal/`), and `msgq` for IPC.
 
 6. **Process Registry Example:**
-	```python
-	procs = [
-	  PythonProcess("camerad", "selfdrive.camerad.camerad", always_run),
-	  PythonProcess("modeld", "selfdrive.modeld.modeld", always_run),
-	  PythonProcess("controlsd", "selfdrive.controls.controlsd", always_run),
-	  PythonProcess("plannerd", "selfdrive.controls.plannerd", always_run),
-	  PythonProcess("radard", "selfdrive.controls.radard", always_run),
-	  PythonProcess("card", "selfdrive.car.card", always_run),
-	  PythonProcess("socketd", "selfdrive.socketd.socketd", always_run),
-	]
-	```
+	 ```python
+	 procs = [
+		 PythonProcess("camerad", "selfdrive.camerad.camerad", always_run),
+		 PythonProcess("modeld", "selfdrive.modeld.modeld", always_run),
+		 PythonProcess("controlsd", "selfdrive.controls.controlsd", always_run),
+		 PythonProcess("plannerd", "selfdrive.controls.plannerd", always_run),
+		 PythonProcess("radard", "selfdrive.controls.radard", always_run),
+		 PythonProcess("card", "selfdrive.car.card", always_run),
+		 PythonProcess("pandad", "selfdrive.pandad.pandad", always_run),
+	 ]
+	 ```
 
 ---
 
-### Orange Pi 5 Porting Checklist: BlackPanda CAN
 
-- [ ] `socketd` enabled for CAN bridge to BlackPanda
+### Orange Pi 5 Porting Checklist: Panda CAN
+
+- [ ] `pandad` enabled for CAN bridge to Panda
 - [ ] Only your car’s interface and CAN parser present in `selfdrive/car/`
 - [ ] All ELM327, side radar, and unused car integrations removed
 - [ ] Only IMX415 front camera enabled in `camerad`
 - [ ] Only `driving_vision.rknn` and `driving_policy.rknn` models present
-- [ ] All safety logic handled by BlackPanda and OpenPilot safety hooks
+- [ ] All safety logic handled by Panda and OpenPilot safety hooks
 
 ## 🚗 What is EnhancedOpenPilot?
 EnhancedOpenPilot is a fork of OpenPilot, re-architected for the Orange Pi 5 (RK3588) and the BrownPanda Chinese EV framework. It replaces comma.ai hardware with:
