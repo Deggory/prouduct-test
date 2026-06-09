@@ -1,602 +1,1051 @@
 # MODELD.MD (Authoritative Version)
 
-## Section A — Engineering Specification
+# Engineering Specification + Validation Specification + AI Agent Operating Manual
 
-### 1. Objective
+Version: 3.0
 
-* Purpose of modeld
-* Scope boundaries
-* Supported runtimes
-* Supported forks
+Target Hardware:
 
-### 2. What modeld Actually Is
+* RK3588
+* RK3588S
+* Orange Pi 5
+* Orange Pi 5 Plus
 
-Modeld is:
+Target Runtime:
 
-Camera Input
+* RKNN Vision Core 0
+* RKNN Policy Core 1
+* OpenCL Preprocessing
+* DMA-BUF
+* VisionIPC
+
+Target Camera:
+
+* IMX415
+* RKISP
+* NV12
+
+Target Forks:
+
+* openpilot
+* sunnypilot
+* frogpilot
+* OPKR
+* KisaPilot
+
+---
+
+# Section A — Engineering Specification
+
+## 1. Objective
+
+This document defines:
+
+* modeld architecture
+* preprocessing pipeline
+* tensor generation
+* metadata handling
+* RKNN integration
+* model output publishing
+* planner interaction
+* validation requirements
+
+Goal:
+
+Production-quality RK3588 modeld implementation.
+
+---
+
+## 2. What modeld Is
+
+modeld is the perception runtime.
+
+It is responsible for:
+
+Camera Frames
 ↓
 Preprocessing
 ↓
 Tensor Generation
 ↓
-Model Execution
+Vision Model
+↓
+Policy Model
 ↓
 Output Parsing
 ↓
-Message Publishing
+modelV2
+↓
+Planner
 
-Modeld is not a neural network.
+modeld is not:
 
-### 3. Architectural Position
+* camera driver
+* VisionIPC transport
+* planner
+* controls system
 
-Camera
+---
+
+## 3. Production Pipeline
+
+IMX415
+↓
+RKISP
+↓
+NV12 DMA-BUF
 ↓
 VisionIPC
 ↓
 modeld
 ↓
-plannerd
+loadyuv.cl
 ↓
-controlsd
+transform.cl
+↓
+DrivingModelFrame.prepare()
+↓
+Vision Tensor
+↓
+RKNN Vision Core 0
+↓
+Hidden State
+↓
+RKNN Policy Core 1
+↓
+Output Parsing
+↓
+modelV2/msgq
+↓
+Planner
 
-### 4. System Responsibilities
+---
 
-camera.md owns:
+## 4. Modeld Ownership
 
-* Camera
-* Intrinsics
-* Warp
-* VisionIPC production
+camera.md
 
-modeld.md owns:
+owns:
 
-* Tensor preparation
-* State management
-* Inference orchestration
-* Metadata parsing
-* Message publishing
+Camera Correctness
 
-rknn.md owns:
+visionipc.md
 
-* RKNN backend
+owns:
 
-### 5. Repository Discovery
+Frame Transport
+
+modeld.md
+
+owns:
+
+Preprocessing
+
+Tensor Generation
+
+Model Orchestration
+
+Output Parsing
+
+rknn.md
+
+owns:
+
+RKNN Runtime
+
+validation.md
+
+owns:
+
+Correctness Verification
+
+---
+
+## 5. Modeld Philosophy
+
+Do not rewrite working preprocessing.
+
+The safest architecture is:
+
+NV12
+↓
+loadyuv.cl
+↓
+transform.cl
+↓
+Tensor
+↓
+RKNN
+
+Only inference changes.
+
+---
+
+## 6. Tinygrad Replacement Rule
+
+Replace:
+
+tinygrad inference
+
+Do not replace:
+
+camera pipeline
+
+warp generation
+
+preprocessing
+
+metadata semantics
+
+planner outputs
+
+---
+
+## 7. Vision Model Ownership
+
+Vision model generates:
+
+* scene understanding
+* feature vectors
+* hidden state
+
+Vision model executes first.
+
+---
+
+## 8. Policy Model Ownership
+
+Policy model consumes:
+
+features
+
+desire
+
+hidden state
+
+driving context
+
+Policy executes second.
+
+---
+
+## 9. Production RKNN Assignment
+
+Vision
+
+↓
+
+Core 0
+
+Policy
+
+↓
+
+Core 1
+
+Core 2
+
+↓
+
+Reserved
+
+---
+
+## 10. Hidden State Architecture
+
+Vision
+↓
+hidden_state
+↓
+Policy
+
+Hidden state must persist across frames.
+
+---
+
+## 11. Temporal Architecture
+
+Single-frame validation is insufficient.
+
+Validate:
+
+100+
+
+Consecutive Frames
+
+Minimum.
+
+---
+
+## 12. OpenCL Architecture
+
+Production preprocessing:
+
+loadyuv.cl
+↓
+transform.cl
+
+Do not bypass unless validated.
+
+---
+
+## 13. Why OpenCL Remains
+
+OpenCL already produces:
+
+Correct tensors
+
+Correct geometry
+
+Correct warps
+
+Changing it increases risk.
+
+---
+
+## 14. Tensor Architecture
+
+Typical outputs:
+
+img
+
+big_img
+
+feature tensors
+
+hidden state
+
+---
+
+## 15. Tensor Layout Policy
+
+Supported:
+
+NCHW
+
+NHWC
+
+Layout must be discovered.
+
+Never assumed.
+
+---
+
+## 16. Metadata Architecture
+
+Metadata defines:
+
+Inputs
+
+Outputs
+
+Shapes
+
+Dtypes
+
+Slices
+
+Semantics
+
+Metadata is authoritative.
+
+---
+
+## 17. Metadata Rule
+
+Never hardcode:
+
+Output indices
+
+Slice locations
+
+Output ownership
+
+Read metadata.
+
+---
+
+## 18. Output Parsing Architecture
+
+Vision Output
+↓
+Metadata
+↓
+Parsed Structures
+↓
+modelV2
+
+---
+
+## 19. Message Publishing
+
+Publish:
+
+modelV2
+
+cameraOdometry
+
+related messages
+
+through msgq/cereal
+
+---
+
+## 20. Planner Interface
+
+Planner consumes:
+
+modelV2
+
+Modeld must preserve:
+
+schema
+
+units
+
+frequency
+
+semantics
+
+---
+
+## 21. CPU Architecture
+
+Prefer:
+
+A76 cores
+
+CPU4–CPU7
+
+for modeld.
+
+---
+
+## 22. Scheduler Policy
+
+Optional:
+
+SCHED_FIFO
+
+Priority:
+
+50–60
+
+Only after validation.
+
+---
+
+## 23. Performance Targets
+
+Current:
+
+18–30 ms
+
+Camera → modelV2
+
+Target:
+
+<30 ms
+
+---
+
+## 24. DMA-BUF Interaction
+
+DMA-BUF affects:
+
+Frame transport
+
+Not:
+
+Tensor semantics
+
+Not:
+
+Model outputs
+
+---
+
+## 25. VisionIPC Interaction
+
+Modeld consumes:
+
+VisionIPC frames
+
+Modeld must validate:
+
+format
+
+timestamps
+
+layout
+
+before preprocessing.
+
+---
+
+## 26. Replay Compatibility
+
+Replay must generate identical:
+
+tensors
+
+outputs
+
+planner behavior
+
+when compared to live input.
+
+---
+
+## 27. Failure Modes
+
+Wrong Tensor
+
+Wrong Layout
+
+Wrong Metadata
+
+Wrong Hidden State
+
+Wrong Outputs
+
+Planner Instability
+
+Must be detected.
+
+---
+
+## 28. Production Rule
+
+Never optimize:
+
+Before validation.
+
+Never deploy:
+
+Before validation.
+
+---
+
+# Section B — Validation Specification
+
+## 29. Discovery Validation
 
 Discover:
 
-* modeld.py
-* helpers.py
-* model runners
-* metadata
-* tinygrad
-* RKNN integration points
+modeld path
+
+metadata
+
+runtime
+
+inputs
+
+outputs
 
 Generate:
 
-modeld_analysis.json
+modeld_inventory.json
 
-### 6. Camera Input Layer
+---
 
-VisionIPC
-↓
-Frame Acquisition
-↓
-Synchronization
+## 30. Input Validation
 
-### 7. Preprocessing Layer
+Validate:
+
+Frame Shape
+
+Frame Layout
+
+Frame Timing
+
+Frame Integrity
+
+---
+
+## 31. VisionIPC Validation
+
+Validate:
+
+Frames Arrive
+
+Timestamps Valid
+
+No Corruption
+
+---
+
+## 32. OpenCL Validation
+
+Validate:
 
 loadyuv.cl
 
 transform.cl
 
-DrivingModelFrame.prepare()
-
-### 8. Tensor Generation Layer
-
-Image tensors
-
-State tensors
-
-Feature tensors
-
-Control tensors
-
-### 9. Tensor Ownership
-
-img
-
-big_img
-
-desire
-
-traffic_convention
-
-lateral_control_params
-
-prev_desired_curv
-
-features_buffer
-
-hidden_state
-
-### 10. Tensor Documentation System
+Execution Success
 
 Generate:
 
-tensor_report.json
-
-Record:
-
-* shape
-* dtype
-* layout
-* producer
-* consumer
-
-### 11. Memory Architecture
-
-Persistent Buffers
-
-Buffer Reuse
-
-Allocation Strategy
-
-### 12. Temporal Architecture
-
-Feature Buffers
-
-Hidden State
-
-Transformer Cache
-
-History Tensors
-
-### 13. State Lifecycle
-
-Frame N
-↓
-Inference
-↓
-State Update
-↓
-Frame N+1
-
-### 14. Model Lifecycle
-
-Initialize
-↓
-Validate
-↓
-Infer
-↓
-Update State
-↓
-Publish
-
-### 15. Message Publishing
-
-modelV2
-
-cameraOdometry
-
-Associated messages
-
-### 16. Planner Contract
-
-Planner compatibility rules
-
-Message schema ownership
-
-Unit ownership
-
-Field ownership
-
-### 17. Runtime Abstraction Layer
-
-ModelRunner
-
-initialize()
-
-validate()
-
-infer()
-
-shutdown()
-
-### 18. TinygradRunner
-
-Reference implementation
-
-Fallback backend
-
-Regression backend
-
-### 19. RKNNRunner
-
-Production backend
-
-NPU backend
-
-Validation backend
-
-### 20. Backend Selection
-
-tinygrad
-
-rknn
-
-auto
-
-### 21. Threading Architecture
-
-Camera Thread
-
-Inference Thread
-
-Publishing Thread
-
-### 22. Queue Architecture
-
-Input Queue
-
-Inference Queue
-
-Publish Queue
-
-### 23. Memory Policy
-
-Avoid per-frame allocation
-
-Reuse buffers
-
-Track ownership
-
-### 24. Performance Architecture
-
-Latency budgets
-
-Timing budgets
-
-FPS budgets
+opencl_validation.json
 
 ---
 
-## Section B — Validation Specification
+## 33. Tensor Dump Validation
 
-### 25. Discovery Validation
-
-Verify discovery completed
-
-### 26. Tensor Validation
-
-Shape
-
-Dtype
-
-Layout
-
-Producer
-
-Consumer
-
-### 27. Image Tensor Validation
+Dump:
 
 img
 
 big_img
 
-Validation
+hidden state
 
-### 28. Non-Image Tensor Validation
+Generate:
 
-desire
+tensor_validation.json
 
-traffic_convention
+---
 
-lateral_control_params
+## 34. Tensor Statistics Validation
 
-prev_desired_curv
+Record:
 
-### 29. Metadata Validation
+Min
+
+Max
+
+Mean
+
+Std
+
+Compare with reference.
+
+---
+
+## 35. Tensor Reconstruction Validation
+
+Tensor
+↓
+Image
+
+Validate:
+
+crop
+
+warp
+
+color
+
+alignment
+
+---
+
+## 36. Metadata Validation
+
+Validate:
 
 Input Count
 
 Output Count
 
-Input Shapes
+Shapes
 
-Output Shapes
+Dtypes
 
-Generate:
-
-metadata_report.json
-
-### 30. Vision Model Validation
-
-Input Validation
-
-Output Validation
+Slices
 
 Generate:
 
-vision_validation.json
+metadata_validation.json
 
-### 31. Policy Model Validation
+---
 
-Input Validation
+## 37. Vision Validation
 
-Output Validation
+Tinygrad
+↓
+Reference
+
+RKNN
+↓
+Candidate
+
+Same Input
+
+Compare Outputs
+
+---
+
+## 38. Vision Metrics
+
+MAE
+
+Relative MAE
+
+Correlation
+
+Cosine Similarity
+
+---
+
+## 39. Vision Acceptance
+
+Minimum:
+
+Correlation > 0.995
+
+Preferred:
+
+Correlation > 0.999
+
+---
+
+## 40. Policy Validation
+
+Same Features
+
+Compare Outputs
 
 Generate:
 
 policy_validation.json
 
-### 32. Hidden State Validation
+---
+
+## 41. Policy Metrics
+
+MAE
+
+Relative MAE
+
+Correlation
+
+Cosine Similarity
+
+---
+
+## 42. Policy Acceptance
+
+Minimum:
+
+Correlation > 0.995
+
+Preferred:
+
+Correlation > 0.999
+
+---
+
+## 43. Hidden State Validation
+
+Validate:
 
 Persistence
 
-Consistency
+Reuse
 
-Memory
+Temporal Consistency
 
-### 33. Feature Buffer Validation
+---
 
-Update correctness
+## 44. Multi-Frame Validation
 
-Reuse correctness
+Minimum:
 
-### 34. Timing Validation
+100 Frames
 
-Capture
+Preferred:
 
-Tensor Ready
+1000+
 
-Inference Start
+---
 
-Inference End
+## 45. Output Validation
 
-Publish
-
-Generate:
-
-modeld_timing.json
-
-### 35. Latency Validation
-
-Camera
-
-Preprocess
-
-Inference
-
-Parsing
-
-Publishing
-
-### 36. Memory Validation
-
-RSS
-
-Virtual Memory
-
-Tensor Allocations
-
-### 37. Queue Validation
-
-Queue Depth
-
-Dropped Frames
-
-Latency
-
-### 38. Planner Validation
-
-Planner alive
-
-Planner compatibility
-
-Planner correctness
-
-### 39. Message Validation
+Validate:
 
 modelV2
 
 cameraOdometry
 
-Schema verification
+Units
 
-### 40. Replay Validation
+Schemas
 
-Replay routes
-
-Compare outputs
-
-### 41. Regression Validation
-
-Tinygrad
-
-vs
-
-RKNN
-
-Comparison
-
-### 42. Stress Testing
-
-30 minutes
-
-1 hour
-
-4 hours
-
-### 43. Recovery Testing
-
-Backend restart
-
-Model reload
-
-Runtime restart
-
-### 44. Acceptance Test Suite
-
-Metadata Test
-
-Tensor Test
-
-State Test
-
-Timing Test
-
-Replay Test
-
-Planner Test
-
-Stress Test
-
-Recovery Test
+Frequency
 
 ---
 
-## Section C — AI Agent Operating Manual
+## 46. Planner Validation
 
-### 45. Repository Analysis Workflow
+Validate:
 
-Analyze:
+Planner Alive
 
-* modeld architecture
-* runtime architecture
-* metadata architecture
-* message architecture
+Planner Stable
+
+Planner Outputs Reasonable
+
+---
+
+## 47. Replay Validation
+
+Replay Route
+
+Compare Outputs
 
 Generate:
 
-fork_modeld_report.json
+replay_validation.json
 
-### 46. Fork Adaptation Rules
+---
 
-Never assume:
+## 48. Latency Validation
 
-* file paths
-* metadata locations
-* model names
-* environment variables
+Measure:
 
-Discover dynamically.
+Preprocessing
 
-### 47. Patch Strategy
+Vision
 
-Allowed:
+Policy
 
-* modeld.py
-* helpers.py
-* runner abstraction
-* backend selection
-* tensor validation
+Publishing
 
-Avoid:
+Generate:
 
-* planner
-* controls
-* vehicle interface
+latency_report.json
 
-unless explicitly required.
+---
 
-### 48. AI Agent Discovery Workflow
+## 49. Stress Validation
 
-Repository
-↓
-Discovery
-↓
-Tensor Inventory
-↓
-Metadata Inventory
-↓
-Runner Inventory
-↓
-Validation
+1 Hour Minimum
 
-### 49. AI Agent Reporting
+4 Hours Preferred
+
+Validate:
+
+Memory
+
+Latency
+
+Temperature
+
+---
+
+## 50. Recovery Validation
+
+Validate:
+
+Runtime Restart
+
+Model Reload
+
+Replay Restart
+
+Recovery Success
+
+---
+
+## 51. Acceptance Criteria
+
+Modeld PASS when:
+
+Tensor PASS
+
+Metadata PASS
+
+Vision PASS
+
+Policy PASS
+
+Planner PASS
+
+Latency PASS
+
+---
+
+# Section C — AI Agent Operating Manual
+
+## 52. Repository Discovery Workflow
+
+Discover:
+
+modeld
+
+metadata
+
+runtime
+
+inputs
+
+outputs
+
+planner interface
 
 Generate:
 
 modeld_analysis.json
 
-tensor_report.json
+---
 
-metadata_report.json
+## 53. Fork Adaptation Rules
 
-backend_report.json
+Never assume:
 
-performance_report.json
+model names
 
-fork_modeld_report.json
+metadata paths
 
-### 50. Failure Modes
+runtime names
 
-Metadata mismatch
+output ordering
 
-Tensor mismatch
+Discover dynamically.
 
-Hidden state reset
+---
 
-Wrong layout
+## 54. RKNN Port Workflow
 
-Wrong shape
+Discover
+↓
+Tensor Validation
+↓
+Metadata Validation
+↓
+Vision Validation
+↓
+Policy Validation
+↓
+Planner Validation
+↓
+Performance Validation
+↓
+Deployment
 
-Backend crash
+---
 
-Planner incompatibility
+## 55. Allowed Modifications
 
-Memory leak
+Inference Runtime
 
-### 51. Error Handling Policy
+Metadata Reader
 
-Fail Fast
+Validation Hooks
 
-Generate Report
+Performance Tools
 
-Preserve Logs
+Output Verification
 
-Do Not Publish Invalid Outputs
+---
 
-### 52. Recovery Policy
+## 56. Avoid Modifications
 
-Reload Backend
+Planner Logic
 
-Reload Model
+Controls Logic
 
-Restart Runner
+Message Semantics
 
-Revalidate State
+Camera Geometry
 
-### 53. Production Readiness
+Warp Logic
+
+Unless explicitly required.
+
+---
+
+## 57. Reporting Requirements
+
+Generate:
+
+modeld_inventory.json
+
+modeld_analysis.json
+
+tensor_validation.json
+
+metadata_validation.json
+
+vision_validation.json
+
+policy_validation.json
+
+latency_report.json
+
+---
+
+## 58. Troubleshooting
+
+Wrong Overlay
+
+Wrong Tensor
+
+Wrong Metadata
+
+Wrong Hidden State
+
+Wrong Planner Output
+
+Runtime Failure
+
+Document root cause and fix.
+
+---
+
+## 59. Production Modes
+
+Mode 1
+
+Tinygrad
+
+Mode 2
+
+RKNN Vision Only
+
+Mode 3
+
+RKNN Vision + Policy
+
+Recommended:
+
+Mode 3
+
+---
+
+## 60. Production Readiness
 
 Required:
 
-Metadata Validated
+Tensor PASS
 
-Tensors Validated
+Metadata PASS
 
-State Validated
+Vision PASS
 
-Planner Compatible
+Policy PASS
 
-Performance Measured
+Planner PASS
 
-Recovery Tested
+Latency PASS
 
-### 54. Production Gate
+Replay PASS
 
-Deployment prohibited until:
+Recovery PASS
 
-All tests PASS
+---
 
-### 55. Final Checklist
+## 61. Final Checklist
 
-Discovery
+VisionIPC
 [ ]
 
-Tensor Inventory
+OpenCL
+[ ]
+
+Tensor
 [ ]
 
 Metadata
@@ -608,16 +1057,16 @@ Vision
 Policy
 [ ]
 
-State
-[ ]
-
-Backend
+Hidden State
 [ ]
 
 Planner
 [ ]
 
-Performance
+Latency
+[ ]
+
+Replay
 [ ]
 
 Recovery
