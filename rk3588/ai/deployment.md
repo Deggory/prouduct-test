@@ -1,14 +1,51 @@
 # DEPLOYMENT.MD (Authoritative Version)
 
-## Section A — Engineering Specification
+# Engineering Specification + Deployment Verification Specification + AI Agent Operating Manual
 
-### 1. Objective
+Version: 2.0
 
-Deployment exists to move a validated RK3588 system into production.
+Target Hardware:
 
-Required sequence:
+* RK3588
+* RK3588S
+* Orange Pi 5
+* Orange Pi 5 Plus
+
+Target Camera:
+
+* IMX415
+* RKISP
+* V4L2
+
+Target Runtime:
+
+* RKNN Vision Core 0
+* RKNN Policy Core 1
+* DMA-BUF
+* EGLImage
+* Mali-G610 GPU
+
+Target Forks:
+
+* openpilot
+* sunnypilot
+* frogpilot
+* OPKR
+* KisaPilot
+
+---
+
+# Section A — Engineering Specification
+
+## 1. Objective
+
+Deployment exists to move a validated RK3588 AI stack into production.
+
+Required order:
 
 camera.md
+↓
+visionipc.md
 ↓
 modeld.md
 ↓
@@ -20,11 +57,11 @@ performance.md
 ↓
 deployment.md
 
-Deployment is the final stage.
+Deployment is the final gate.
 
 ---
 
-### 2. Deployment Philosophy
+## 2. Deployment Philosophy
 
 Deployment is not:
 
@@ -40,89 +77,149 @@ Stable Planner
 ↓
 Safe Vehicle Behavior
 
-Never deploy before validation.
-
-Never deploy before performance verification.
-
 ---
 
-### 3. Deployment Ownership
+## 3. Production Architecture
 
-camera.md owns:
-
-Camera Deployment Readiness
-
-modeld.md owns:
-
-Model Pipeline Readiness
-
-rknn.md owns:
-
-Runtime Readiness
-
-validation.md owns:
-
-Proof of Correctness
-
-performance.md owns:
-
-Proof of Stability
-
-deployment.md owns:
-
-Release Process
-
----
-
-### 4. Supported Architecture
+Target architecture:
 
 IMX415
 ↓
 RKISP
 ↓
-NV12
+V4L2
+↓
+NV12 DMA-BUF
+├──────────────┬─────────────────┐
+│              │                 │
+▼              ▼                 ▼
+VisionIPC    EGLImage         loggerd
+↓              ↓
+OpenCL       Mali GPU
+↓              ↓
+RKNN Vision  UI Preview
+↓              ↓
+RKNN Policy  Overlay
+↓
+modelV2/msgq
+↓
+planner
+↓
+controls
+
+---
+
+## 4. Deployment Ownership
+
+camera.md
+
+owns:
+
+Camera Readiness
+
+visionipc.md
+
+owns:
+
+Transport Readiness
+
+modeld.md
+
+owns:
+
+Model Pipeline Readiness
+
+rknn.md
+
+owns:
+
+NPU Runtime Readiness
+
+validation.md
+
+owns:
+
+Correctness Verification
+
+performance.md
+
+owns:
+
+Performance Verification
+
+deployment.md
+
+owns:
+
+Release Process
+
+---
+
+## 5. Deployment Modes
+
+Mode 1
+
+Baseline
+
+RKISP
 ↓
 VisionIPC
 ↓
-loadyuv.cl
+OpenCL
 ↓
-transform.cl
-↓
-DrivingModelFrame.prepare()
-↓
-RKNN Vision
-↓
-RKNN Policy
-↓
-Planner
-↓
-Controls
-↓
-Vehicle
+RKNN
 
-This is the deployment target architecture.
+Mode 2
+
+DMA-BUF
+
+RKISP
+↓
+DMA-BUF
+↓
+VisionIPC
+↓
+RKNN
+
+Mode 3
+
+DMA-BUF + EGLImage
+
+RKISP
+↓
+DMA-BUF
+├→ VisionIPC → RKNN
+└→ EGLImage → Mali GPU → UI
+
+Production recommendation:
+
+Mode 3
 
 ---
 
-### 5. Deployment Modes
-
-Development
+## 6. Release Philosophy
 
 Validation
-
+↓
+Performance
+↓
+Road Testing
+↓
 Release Candidate
-
+↓
 Production
 
-Always pass through validation.
+Never skip stages.
 
 ---
 
-### 6. Repository Preparation
+## 7. Repository Tracking
 
 Record:
 
 Repository
+
+Fork
 
 Branch
 
@@ -138,115 +235,71 @@ deployment_metadata.json
 
 ---
 
-### 7. Branch Strategy
+## 8. Branch Strategy
 
 Recommended:
 
 main
-
 ↓
-
-rk3588-rknn-validation
-
+rk3588-validation
 ↓
+rk3588-production
 
-rk3588-rknn-production
-
-Never deploy directly from development branches.
+Never deploy from development branches.
 
 ---
 
-### 8. Backup Strategy
-
-Create:
-
-backup/
-
-Store:
-
-Original Models
-
-Original Metadata
-
-Original Configurations
-
-Original Patches
-
-Rollback must always be possible.
-
----
-
-### 9. Artifact Architecture
+## 9. Artifact Architecture
 
 Required:
 
-driving_vision.rknn
+Vision Model
 
-driving_policy.rknn
+Policy Model
 
-metadata
+Metadata
 
-warp files
+Warp Files
 
-configuration files
+Configuration Files
 
-validation reports
+Validation Reports
 
-performance reports
+Performance Reports
+
+Deployment Reports
+
+---
+
+## 10. Artifact Inventory
 
 Generate:
 
 artifact_inventory.json
 
+Record:
+
+Path
+
+Size
+
+Hash
+
+Version
+
+Timestamp
+
 ---
 
-### 10. Artifact Ownership
+## 11. Checksum Policy
+
+Generate SHA256 for:
 
 Models
 
 Metadata
 
-Configuration
-
-Reports
-
-Checksums
-
-Ownership must be documented.
-
----
-
-### 11. Release Bundle Architecture
-
-release_bundle/
-
-models/
-
-metadata/
-
-configs/
-
-reports/
-
-logs/
-
-checksums/
-
----
-
-### 12. Checksum Policy
-
-Generate:
-
-SHA256
-
-for:
-
-Models
-
-Metadata
-
-Configurations
+Configs
 
 Reports
 
@@ -254,15 +307,11 @@ Store permanently.
 
 ---
 
-### 13. Version Control Policy
+## 12. Version Tracking
 
 Track:
 
-Repository
-
-Branch
-
-Commit
+Repository Commit
 
 Model Version
 
@@ -272,37 +321,41 @@ Runtime Version
 
 Kernel Version
 
+Deployment Version
+
 ---
 
-### 14. Configuration Ownership
+## 13. Configuration Ownership
 
-Environment Variables
+Document:
 
 Runtime Selection
 
-Camera Configuration
+Camera Settings
+
+DMA-BUF Settings
+
+EGL Settings
 
 Model Paths
 
 Metadata Paths
 
-Must be documented.
-
 ---
 
-### 15. Runtime Architecture
+## 14. Runtime Architecture
 
 Vision
 
 ↓
 
-NPU Core 0
+Core 0
 
 Policy
 
 ↓
 
-NPU Core 1
+Core 1
 
 Core 2
 
@@ -310,45 +363,75 @@ Core 2
 
 Reserved
 
-Production configuration.
+---
+
+## 15. CPU Architecture
+
+Preferred:
+
+A76 cores
+
+CPU4–CPU7
+
+Avoid A55 execution.
 
 ---
 
-### 16. CPU Architecture
-
-modeld
-
-↓
-
-A76 Cores Only
-
-Avoid A55 execution when possible.
-
----
-
-### 17. Scheduler Policy
+## 16. Scheduler Policy
 
 Optional:
 
 SCHED_FIFO
 
-Only after validation is complete.
+Priority:
+
+50–60
+
+Only after validation.
 
 ---
 
-### 18. Health Monitoring Architecture
+## 17. Logging Policy
 
-Monitor:
+Deployment must record:
+
+Errors
+
+Warnings
+
+Inference Times
+
+Planner State
+
+Camera State
+
+NPU State
+
+---
+
+## 18. Monitoring Philosophy
+
+Every deployment must be observable.
+
+Unmonitored deployments are unsupported.
+
+---
+
+## 19. Health Monitoring
+
+Track:
 
 CPU
 
-Memory
+GPU
 
 NPU
 
+Memory
+
 Temperature
 
-Planner Status
+Planner
 
 Generate:
 
@@ -356,39 +439,33 @@ health_report.json
 
 ---
 
-### 19. Logging Architecture
+## 20. Deployment Artifacts
 
-Record:
+Store:
 
-Startup Events
+Validation Reports
 
-Warnings
+Performance Reports
 
-Errors
+Deployment Reports
 
-Inference Times
+Logs
 
-Camera Status
+Checksums
 
-Planner Status
-
-Logs are deployment artifacts.
+Rollback Package
 
 ---
 
-### 20. Monitoring Philosophy
+# Section B — Deployment Verification Specification
 
-Every deployment must remain observable.
+## 21. Pre-Deployment Gate
 
-Unmonitored deployments are unsupported.
-
----
-
-## Section B — Verification Specification
-
-### 21. Pre-Deployment Checklist
+Required:
 
 Camera PASS
+
+VisionIPC PASS
 
 Modeld PASS
 
@@ -398,11 +475,9 @@ Validation PASS
 
 Performance PASS
 
-Required before deployment.
-
 ---
 
-### 22. Repository Verification
+## 22. Repository Verification
 
 Verify:
 
@@ -412,11 +487,11 @@ Branch Correct
 
 Commit Recorded
 
-Clean Working Tree
+Working Tree Clean
 
 ---
 
-### 23. Artifact Verification
+## 23. Artifact Verification
 
 Verify:
 
@@ -434,57 +509,7 @@ artifact_verification.json
 
 ---
 
-### 24. Model Verification
-
-Verify:
-
-Vision Model
-
-Policy Model
-
-Hashes
-
-Versions
-
-Generate:
-
-model_verification.json
-
----
-
-### 25. Metadata Verification
-
-Verify:
-
-Metadata Exists
-
-Metadata Matches Model
-
-Version Recorded
-
-Generate:
-
-metadata_verification.json
-
----
-
-### 26. Runtime Verification
-
-Verify:
-
-RKNN Runtime Installed
-
-NPU Available
-
-Core Assignment Valid
-
-Generate:
-
-runtime_verification.json
-
----
-
-### 27. Camera Verification
+## 24. Camera Verification
 
 Verify:
 
@@ -496,45 +521,113 @@ FPS Correct
 
 NV12 Correct
 
+DMA-BUF Working
+
 Generate:
 
 camera_verification.json
 
 ---
 
-### 28. Warp Verification
+## 25. VisionIPC Verification
 
 Verify:
 
-Warp Exists
+Streams Exist
 
-Resolution Matches
+Timestamps Valid
 
-Intrinsics Match
+Consumers Alive
 
 Generate:
 
-warp_verification.json
+visionipc_verification.json
 
 ---
 
-### 29. Configuration Verification
+## 26. DMA-BUF Verification
 
 Verify:
 
-Environment Variables
+FD Valid
 
-Paths
+Import Success
 
-Runtime Selection
+No Corruption
 
 Generate:
 
-config_verification.json
+dmabuf_verification.json
 
 ---
 
-### 30. Startup Verification
+## 27. EGL Verification
+
+Verify:
+
+EGLImage Import
+
+Texture Creation
+
+Camera Preview
+
+Generate:
+
+egl_verification.json
+
+---
+
+## 28. OpenCL Verification
+
+Verify:
+
+loadyuv.cl
+
+transform.cl
+
+Execution Success
+
+Generate:
+
+opencl_verification.json
+
+---
+
+## 29. RKNN Verification
+
+Verify:
+
+Runtime Available
+
+Vision Model Loads
+
+Policy Model Loads
+
+Core Assignment Correct
+
+Generate:
+
+rknn_verification.json
+
+---
+
+## 30. Metadata Verification
+
+Verify:
+
+Metadata Exists
+
+Matches Model
+
+Version Recorded
+
+Generate:
+
+metadata_verification.json
+
+---
+
+## 31. Startup Verification
 
 Verify:
 
@@ -542,31 +635,17 @@ Camera Starts
 
 VisionIPC Starts
 
-modeld Starts
+Modeld Starts
 
 Planner Starts
 
-Processes Remain Alive
+UI Starts
+
+All remain alive.
 
 ---
 
-### 31. Health Verification
-
-Monitor:
-
-CPU
-
-Memory
-
-NPU
-
-Temperature
-
-Process Health
-
----
-
-### 32. Runtime Verification
+## 32. Runtime Verification
 
 Validate:
 
@@ -574,19 +653,19 @@ Inference Success
 
 No Crashes
 
-Stable Output
+Stable Outputs
 
 ---
 
-### 33. Validation Report Verification
+## 33. Validation Report Verification
 
 Required:
 
 Camera Validation
 
-Model Validation
+VisionIPC Validation
 
-RKNN Validation
+Model Validation
 
 Planner Validation
 
@@ -594,7 +673,7 @@ System Validation
 
 ---
 
-### 34. Performance Report Verification
+## 34. Performance Report Verification
 
 Required:
 
@@ -610,9 +689,87 @@ Recovery PASS
 
 ---
 
-## Section C — Road Test Specification
+## 35. Production Performance Targets
 
-### 35. Road Test Philosophy
+Mode 3 Target:
+
+Camera → modelV2
+
+15–27 ms
+
+Camera → UI
+
+20–35 ms
+
+---
+
+## 36. Memory Verification
+
+Verify:
+
+No Leaks
+
+Stable Allocation Count
+
+Stable Buffer Usage
+
+---
+
+## 37. Thermal Verification
+
+Verify:
+
+CPU < 80°C
+
+NPU < 85°C
+
+GPU Stable
+
+No Throttling
+
+---
+
+## 38. Recovery Verification
+
+Verify:
+
+Camera Restart
+
+Runtime Restart
+
+Model Reload
+
+Recovery Success
+
+---
+
+## 39. Stress Verification
+
+Minimum:
+
+1 Hour
+
+Preferred:
+
+4 Hours
+
+No Crashes
+
+No Leaks
+
+No Performance Collapse
+
+---
+
+## 40. Acceptance Criteria
+
+All verification sections PASS.
+
+---
+
+# Section C — Road Test Specification
+
+## 41. Road Test Philosophy
 
 Bench success is insufficient.
 
@@ -620,25 +777,27 @@ Road validation is mandatory.
 
 ---
 
-### 36. Phase 1
+## 42. Phase 1
 
 Low-Speed Testing
 
-Objectives:
+Validate:
 
-Overlay Validation
+Overlay
 
-Planner Validation
+Planner
 
-Runtime Validation
+Inference
+
+Camera Stability
 
 ---
 
-### 37. Phase 2
+## 43. Phase 2
 
-Mixed Traffic Testing
+Mixed Traffic
 
-Objectives:
+Validate:
 
 Curves
 
@@ -650,13 +809,11 @@ Planner Stability
 
 ---
 
-### 38. Phase 3
+## 44. Phase 3
 
-Extended Duration Testing
+Extended Operation
 
 1–4 Hours
-
-Continuous Operation
 
 Monitor:
 
@@ -670,35 +827,25 @@ Planner
 
 ---
 
-### 39. Thermal Validation
+## 45. Overlay Validation
 
-Monitor:
+Validate:
 
-CPU
+Path
 
-GPU
+Lane
 
-NPU
+Road Edge
 
-No thermal throttling permitted.
+Lead Vehicle
 
----
-
-### 40. Memory Validation
-
-Monitor:
-
-RSS
-
-Virtual Memory
-
-Leak Growth
-
-No leaks permitted.
+Overlay must remain stable.
 
 ---
 
-### 41. Planner Validation
+## 46. Planner Validation
+
+Validate:
 
 Planner Alive
 
@@ -710,7 +857,21 @@ No Unexpected Behavior
 
 ---
 
-### 42. Runtime Recovery Validation
+## 47. UI Validation
+
+Validate:
+
+Camera Preview
+
+Overlay Rendering
+
+DMA-BUF Path
+
+EGLImage Path
+
+---
+
+## 48. Runtime Recovery Validation
 
 Validate:
 
@@ -718,19 +879,17 @@ Camera Restart
 
 Runtime Restart
 
+Replay Restart
+
 Model Reload
 
 Recovery Success
 
-Generate:
-
-recovery_report.json
-
 ---
 
-## Section D — Release Engineering
+# Section D — Release Engineering
 
-### 43. Release Candidate Process
+## 49. Release Candidate Process
 
 RC1
 ↓
@@ -742,11 +901,9 @@ Validation
 ↓
 Production
 
-Recommended workflow.
-
 ---
 
-### 44. Regression Policy
+## 50. Regression Policy
 
 Repeat validation after:
 
@@ -760,7 +917,7 @@ Repository Updates
 
 ---
 
-### 45. Long-Term Maintenance
+## 51. Long-Term Maintenance
 
 Store:
 
@@ -774,7 +931,7 @@ For every release.
 
 ---
 
-### 46. Security Policy
+## 52. Security Policy
 
 Verify:
 
@@ -784,39 +941,41 @@ Metadata Integrity
 
 Artifact Integrity
 
-Prevent accidental deployment of modified artifacts.
+Prevent corrupted deployments.
 
 ---
 
-### 47. Rollback Philosophy
+## 53. Rollback Philosophy
 
 Rollback must be immediate.
 
-Never deploy without rollback capability.
+Never deploy without rollback.
 
 ---
 
-### 48. Rollback Assets
+## 54. Rollback Assets
 
-Known-Good Branch
+Known Good Branch
 
-Known-Good Models
+Known Good Models
 
-Known-Good Metadata
+Known Good Metadata
 
-Known-Good Runtime
+Known Good Runtime
+
+Known Good Configurations
 
 ---
 
-### 49. Rollback Triggers
+## 55. Rollback Triggers
 
 Planner Instability
 
 Runtime Crashes
 
-Memory Leak
-
 Thermal Instability
+
+Memory Leak
 
 Unexpected Outputs
 
@@ -824,49 +983,73 @@ Immediate rollback required.
 
 ---
 
-## Section E — AI Agent Operating Manual
+## 56. Release Package Structure
 
-### 50. Repository Discovery Workflow
+release_bundle/
 
-Discover:
+models/
 
-Camera Architecture
+metadata/
 
-VisionIPC
+configs/
 
-modeld
+reports/
 
-Metadata
+logs/
 
-RKNN Runtime
+checksums/
 
-Planner
-
-Generate:
-
-deployment_analysis.json
+rollback/
 
 ---
 
-### 51. Fork Adaptation Rules
+# Section E — AI Agent Operating Manual
+
+## 57. Repository Discovery Workflow
+
+Discover:
+
+Camera
+
+VisionIPC
+
+DMA-BUF
+
+EGL
+
+OpenCL
+
+Modeld
+
+RKNN
+
+Planner
+
+UI
+
+Generate:
+
+deployment_inventory.json
+
+---
+
+## 58. Fork Adaptation Rules
 
 Never assume:
 
 Paths
 
-Metadata Locations
+Runtime Layout
+
+Metadata Location
 
 Environment Variables
 
-Runtime Layout
-
-Generate:
-
-fork_deployment_report.json
+Discover dynamically.
 
 ---
 
-### 52. Deployment Workflow
+## 59. Deployment Workflow
 
 Discovery
 ↓
@@ -884,31 +1067,23 @@ Production
 
 ---
 
-### 53. AI Agent Responsibilities
+## 60. AI Agent Responsibilities
 
 Analyze Repository
 
-Detect Camera Pipeline
-
-Detect modeld Architecture
-
-Detect Runtime
-
-Detect Metadata
-
-Generate Patch Plan
-
 Generate Validation Plan
+
+Generate Performance Plan
 
 Generate Rollback Plan
 
-Generate Deployment Report
+Generate Deployment Plan
 
-These responsibilities come directly from the deployment specification.
+Generate Reports
 
 ---
 
-### 54. Reporting Requirements
+## 61. Reporting Requirements
 
 Generate:
 
@@ -916,29 +1091,53 @@ deployment_metadata.json
 
 artifact_inventory.json
 
-model_verification.json
-
-runtime_verification.json
-
 camera_verification.json
+
+visionipc_verification.json
+
+rknn_verification.json
 
 deployment_report.json
 
-deployment_analysis.json
+deployment_inventory.json
 
 ---
 
-### 55. Failure Modes
+## 62. Troubleshooting
 
-Runtime Instability
+Model Load Failure
 
-Planner Instability
+DMA-BUF Failure
+
+EGL Import Failure
 
 Thermal Throttling
 
+Planner Failure
+
+Overlay Failure
+
 Memory Leak
 
-Validation Failure
+Deployment Rollback
+
+Document root cause and resolution.
+
+---
+
+## 63. Failure Modes
+
+Runtime Failure
+
+Planner Failure
+
+Thermal Failure
+
+Memory Leak
+
+DMA-BUF Failure
+
+GPU Import Failure
 
 Artifact Corruption
 
@@ -946,11 +1145,17 @@ Rollback Failure
 
 ---
 
-### 56. Production Readiness
+## 64. Production Readiness
 
 Required:
 
 Camera PASS
+
+VisionIPC PASS
+
+DMA-BUF PASS
+
+EGL PASS
 
 Modeld PASS
 
@@ -964,7 +1169,7 @@ Road Testing PASS
 
 ---
 
-### 57. Production Gate
+## 65. Production Gate
 
 Deployment prohibited until:
 
@@ -974,12 +1179,21 @@ No exceptions.
 
 ---
 
-### 58. Final Release Checklist
+## 66. Final Checklist
 
 Repository
 [ ]
 
 Camera
+[ ]
+
+VisionIPC
+[ ]
+
+DMA-BUF
+[ ]
+
+EGLImage
 [ ]
 
 Modeld
@@ -997,16 +1211,10 @@ Performance
 Road Testing
 [ ]
 
+Rollback Package
+[ ]
+
 Documentation
-[ ]
-
-Release Bundle
-[ ]
-
-Checksums
-[ ]
-
-Rollback Plan
 [ ]
 
 Result:
@@ -1015,7 +1223,7 @@ PASS / FAIL
 
 ---
 
-### 59. Final Deployment Record
+## 67. Final Deployment Record
 
 Status:
 
@@ -1037,4 +1245,4 @@ Operator:
 
 Notes:
 
-Only deployments achieving PASS may be considered production-ready.
+Only PASS deployments may be considered production-ready.
