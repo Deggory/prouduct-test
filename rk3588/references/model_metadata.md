@@ -1,364 +1,284 @@
-# MODEL_METADATA.MD
+# MODEL_METADATA.MD (Authoritative Version)
 
-# OpenPilot Model Metadata Reference
+# Engineering Specification + Validation Specification + AI Agent Operating Manual
 
-Version: 1.0
+Version: 3.0
 
-Purpose:
+Target Runtime:
 
-Define how model metadata should be discovered, validated, interpreted, and preserved when integrating:
-
-* RKNN
 * Tinygrad
-* ONNX
-* Future runtimes
+* ONNX Runtime
+* RKNN
+* OpenPilot Modeld
 
-Target Platforms:
+Target Models:
+
+* Driving Vision Model
+* Driving Policy Model
+* Driver Monitoring Models
+* Future OpenPilot Models
+
+Target Platform:
 
 * RK3588
-* RK3588S
 * Orange Pi 5
-* Orange Pi 5 Plus
-
-Target Software:
-
-* openpilot
-* sunnypilot
-* frogpilot
-* OPKR
-* KisaPilot
+* OpenPilot Derived Forks
 
 ---
 
-# 1. What Metadata Is
+# Section A — Engineering Specification
+
+## 1. Objective
+
+This document defines:
+
+* model metadata architecture
+* metadata ownership
+* tensor definitions
+* input definitions
+* output definitions
+* slice definitions
+* runtime compatibility
+* AI-agent integration
+
+Goal:
+
+Metadata-driven model execution without hardcoded tensor assumptions.
+
+---
+
+## 2. What Metadata Is
 
 Metadata is the contract between:
 
 Model
+↓
+Runtime
+↓
+Parser
+↓
+Planner
 
-and
+Metadata describes:
 
-Modeld
+Inputs
 
-Metadata defines:
+Outputs
 
-* Inputs
-* Outputs
-* Shapes
-* Tensor layouts
-* Output slices
-* Hidden states
-* Feature buffers
+Shapes
 
-The model is not authoritative.
+Layouts
+
+Slices
+
+Semantics
+
+Units
+
+Meaning
+
+---
+
+## 3. Metadata Philosophy
+
+The model file contains weights.
+
+Metadata contains meaning.
+
+Without metadata:
+
+Model outputs become anonymous arrays.
+
+---
+
+## 4. Why Metadata Matters
+
+Example:
+
+Output tensor:
+
+```text
+[0.15, -0.22, 0.04, ...]
+```
+
+Without metadata:
+
+Unknown.
+
+With metadata:
+
+```text
+path
+lane
+road edge
+lead vehicle
+curvature
+hidden state
+```
+
+---
+
+## 5. OpenPilot Metadata Architecture
+
+Model
+↓
+Metadata
+↓
+Parser
+↓
+modelV2
+↓
+Planner
 
 Metadata is authoritative.
 
 ---
 
-# 2. Critical Rule
+## 6. Metadata Ownership
 
-Never hardcode:
+camera.md
 
-```python
-outputs[0]
-outputs[1]
-outputs[2]
-```
+owns:
 
-Never assume output ordering.
+Camera Geometry
 
-Always validate against metadata.
+visionipc.md
 
-Many fork failures originate from output assumptions.
+owns:
+
+Frame Transport
+
+modeld.md
+
+owns:
+
+Tensor Generation
+
+model_metadata.md
+
+owns:
+
+Tensor Meaning
+
+rknn.md
+
+owns:
+
+Runtime Execution
 
 ---
 
-# 3. Metadata Responsibilities
+## 7. Metadata Components
 
-Metadata owns:
+Metadata defines:
 
-Input Definitions
+Inputs
 
-Output Definitions
+Outputs
+
+Slices
+
+Shapes
+
+Dtypes
+
+Layouts
+
+Semantic Meaning
+
+Units
+
+---
+
+## 8. Input Metadata
+
+Defines:
+
+Input Names
+
+Input Shapes
+
+Input Layout
+
+Input Dtype
+
+Input Purpose
+
+---
+
+## 9. Output Metadata
+
+Defines:
 
 Output Names
 
 Output Shapes
 
-Output Interpretation
+Output Layout
 
-Hidden State Definitions
+Output Dtype
 
-Feature Buffer Definitions
-
----
-
-# 4. Runtime Responsibilities
-
-Runtime owns:
-
-Loading Model
-
-Executing Model
-
-Returning Tensors
-
-Runtime does NOT own:
-
-Tensor meaning
-
-Output interpretation
-
-Path extraction
-
-Lane extraction
-
-Those belong to metadata.
+Output Meaning
 
 ---
 
-# 5. Common Metadata Files
+## 10. Slice Metadata
 
-Examples:
+Defines:
 
-driving_vision_metadata.pkl
+Output Start
 
-driving_policy_metadata.pkl
+Output End
 
-Some forks may use:
+Output Ownership
 
-json
-
-yaml
-
-protobuf
-
-pickle
-
-The format is less important than the information.
+Output Semantics
 
 ---
 
-# 6. Metadata Discovery
+## 11. Metadata Rule
 
-Before integration:
+Never hardcode:
 
-Locate:
+Tensor Indices
 
-Metadata Files
+Output Positions
 
-Record:
+Slice Locations
 
-Path
+Read metadata.
 
-Size
-
-Hash
-
-Version
-
-Generate:
-
-metadata_inventory.json
+Always.
 
 ---
 
-# 7. Input Definitions
+## 12. Metadata Evolution
 
-Every input should define:
+Models change.
 
-Name
+Metadata allows:
 
-Shape
+Parser compatibility
 
-Dtype
-
-Layout
-
-Purpose
-
-Example:
-
-img
-
-big_img
-
-desire
-
-traffic_convention
+without rewriting runtime code.
 
 ---
 
-# 8. Output Definitions
+## 13. Layout Metadata
 
-Every output should define:
-
-Name
-
-Shape
-
-Dtype
-
-Purpose
-
-Consumer
-
-Generate:
-
-output_inventory.json
-
----
-
-# 9. Input Ownership
-
-Examples:
-
-img
-
-Owned by:
-
-Camera Pipeline
-
-↓
-
-modeld
-
-big_img
-
-Owned by:
-
-Camera Pipeline
-
-↓
-
-modeld
-
----
-
-# 10. Non-Image Inputs
-
-Examples:
-
-desire
-
-traffic_convention
-
-lateral_control_params
-
-prev_desired_curv
-
-These must be documented.
-
-Never assume shape.
-
----
-
-# 11. Hidden State Ownership
-
-Examples:
-
-hidden_state
-
-features_buffer
-
-transformer cache
-
-history tensors
-
-Metadata must define them.
-
----
-
-# 12. Hidden State Rules
-
-Never:
-
-Discard
-
-Reset
-
-Reinitialize
-
-per frame.
-
-Hidden state must persist.
-
----
-
-# 13. Feature Buffer Rules
-
-Typical flow:
-
-Frame N
-
-↓
-
-Inference
-
-↓
-
-Feature Buffer Update
-
-↓
-
-Frame N+1
-
-↓
-
-Reuse
-
-Metadata should document:
-
-Shape
-
-Purpose
-
-Persistence
-
----
-
-# 14. Shape Validation
-
-Record:
-
-Rank
-
-Dimensions
-
-Layout
-
-Dtype
-
-Examples:
-
-1x12x128x256
-
-1x128x256x12
-
-1x512
-
-1x8
-
-Never assume.
-
----
-
-# 15. Layout Validation
-
-Possible:
+Possible layouts:
 
 NCHW
 
 NHWC
 
-Metadata should specify expected layout.
+Metadata defines which layout is valid.
 
-Do not infer from model name.
+Never assume.
 
 ---
 
-# 16. Dtype Validation
+## 14. Dtype Metadata
 
 Examples:
 
@@ -370,453 +290,43 @@ int8
 
 uint8
 
-Validate against runtime.
+Metadata defines valid dtype.
 
 ---
 
-# 17. Output Ownership
+## 15. Shape Metadata
 
-Output ownership belongs to metadata.
+Examples:
 
-Not:
+1×12×128×256
 
-RKNN
+1×128×256×12
 
-Tinygrad
-
-ONNX
-
-Backends produce tensors only.
-
-Metadata gives meaning.
+Metadata defines shape.
 
 ---
 
-# 18. Output Slices
+## 16. Input Ownership
 
-Many outputs are packed tensors.
+Typical inputs:
 
-Example:
+Image Tensor
 
-Single Output Tensor
+Big Image Tensor
 
-↓
+Desire
 
-Path
+Traffic Convention
 
-Lane Lines
+Feature History
 
-Road Edges
-
-Lead Vehicles
-
-Metadata defines slice boundaries.
+Hidden State
 
 ---
 
-# 19. Slice Validation
+## 17. Output Ownership
 
-Record:
-
-Start Index
-
-End Index
-
-Shape
-
-Meaning
-
-Generate:
-
-slice_inventory.json
-
----
-
-# 20. Path Output
-
-Typical metadata fields:
-
-Path
-
-Trajectory
-
-Future Position
-
-Curvature
-
-Validate location using metadata.
-
----
-
-# 21. Lane Output
-
-Metadata may define:
-
-Left Lane
-
-Right Lane
-
-Lane Confidence
-
-Lane Probability
-
-Never assume ordering.
-
----
-
-# 22. Road Edge Output
-
-Metadata may define:
-
-Left Edge
-
-Right Edge
-
-Confidence
-
-Validate slices.
-
----
-
-# 23. Lead Vehicle Output
-
-Metadata may define:
-
-Distance
-
-Velocity
-
-Acceleration
-
-Probability
-
-Interpret using metadata only.
-
----
-
-# 24. Desire Output
-
-Metadata may define:
-
-Lane Change
-
-Keep Lane
-
-Turn
-
-Merge
-
-Validate mapping.
-
----
-
-# 25. Policy Output
-
-Policy metadata may define:
-
-Trajectory
-
-Curvature
-
-Desired Path
-
-Control Features
-
-Always validate.
-
----
-
-# 26. Metadata Extraction Tool
-
-Recommended:
-
-tools/rk3588/extract_metadata.py
-
-Responsibilities:
-
-Read metadata
-
-Print shapes
-
-Print slices
-
-Generate reports
-
----
-
-# 27. Metadata Report
-
-Generate:
-
-metadata_report.json
-
-Include:
-
-Inputs
-
-Outputs
-
-Slices
-
-Layouts
-
-Dtypes
-
-Version
-
----
-
-# 28. RKNN Validation
-
-Before deployment:
-
-Compare:
-
-RKNN Inputs
-
-Metadata Inputs
-
-RKNN Outputs
-
-Metadata Outputs
-
-All must match.
-
----
-
-# 29. Tinygrad Validation
-
-Compare:
-
-Tinygrad Runtime
-
-Metadata
-
-Ensure:
-
-Shape consistency
-
-Output consistency
-
----
-
-# 30. ONNX Validation
-
-Compare:
-
-ONNX
-
-Metadata
-
-Validate:
-
-Input count
-
-Output count
-
-Shapes
-
----
-
-# 31. Runtime-Agnostic Design
-
-Metadata must remain valid regardless of runtime.
-
-Supported runtimes:
-
-Tinygrad
-
-RKNN
-
-ONNX
-
-Future runtimes
-
-should all use the same metadata.
-
----
-
-# 32. Fork Compatibility
-
-Different forks may:
-
-Rename outputs
-
-Add outputs
-
-Remove outputs
-
-Change metadata locations
-
-Always rediscover metadata.
-
-Never hardcode paths.
-
----
-
-# 33. Metadata Versioning
-
-Record:
-
-Version
-
-Commit
-
-Hash
-
-Date
-
-Store alongside deployment reports.
-
----
-
-# 34. Metadata Regression Testing
-
-Repeat validation after:
-
-Model changes
-
-Runtime changes
-
-Metadata changes
-
-Fork updates
-
----
-
-# 35. Metadata Failure Modes
-
-Common failures:
-
-Wrong Shape
-
-Wrong Layout
-
-Missing Output
-
-Wrong Slice
-
-Corrupt Metadata
-
-Version Mismatch
-
-All must be detected.
-
----
-
-# 36. AI Agent Rules
-
-When modifying a repository:
-
-1. Discover metadata
-2. Inventory inputs
-3. Inventory outputs
-4. Inventory slices
-5. Validate runtime compatibility
-6. Generate report
-7. Only then modify modeld
-
-Never skip metadata validation.
-
----
-
-# 37. Pass Criteria
-
-Metadata passes if:
-
-Inputs Validated
-
-Outputs Validated
-
-Slices Validated
-
-Layouts Validated
-
-Dtypes Validated
-
-Version Recorded
-
----
-
-# 38. Fail Criteria
-
-Any of:
-
-Unknown Output
-
-Unknown Input
-
-Missing Slice
-
-Shape Mismatch
-
-Layout Mismatch
-
-Metadata Corruption
-
-results in FAIL.
-
----
-
-# 39. Production Checklist
-
-Metadata Located
-
-[ ] PASS
-
-Inputs Documented
-
-[ ] PASS
-
-Outputs Documented
-
-[ ] PASS
-
-Slices Documented
-
-[ ] PASS
-
-Layouts Validated
-
-[ ] PASS
-
-Dtypes Validated
-
-[ ] PASS
-
----
-
-# 40. Final Reference
-
-Correct Architecture:
-
-Camera
-
-↓
-
-VisionIPC
-
-↓
-
-Preprocessing
-
-↓
-
-Model Input
-
-↓
-
-Runtime (Tinygrad / RKNN)
-
-↓
-
-Raw Output Tensors
-
-↓
-
-Metadata Parser
-
-↓
+Typical outputs:
 
 Path
 
@@ -824,14 +334,720 @@ Lane
 
 Road Edge
 
-Lead
+Lead Vehicle
+
+Pose
+
+Hidden State
 
 Policy Outputs
 
-↓
+---
 
+## 18. Hidden State Metadata
+
+Hidden state requires:
+
+Shape
+
+Dtype
+
+Persistence Rules
+
+Ownership
+
+---
+
+## 19. Temporal Metadata
+
+Some outputs depend on:
+
+Previous Frame
+
+Previous Hidden State
+
+Previous Features
+
+Metadata must define temporal ownership.
+
+---
+
+## 20. Semantic Metadata
+
+Each slice must define:
+
+Meaning
+
+Units
+
+Expected Range
+
+Consumer
+
+---
+
+## 21. Planner Interface
+
+Planner consumes:
+
+Parsed Metadata Outputs
+
+Not raw tensors.
+
+---
+
+## 22. Metadata Discovery
+
+AI agents must discover:
+
+Metadata Location
+
+Metadata Version
+
+Metadata Format
+
+Before modifying runtime.
+
+---
+
+## 23. Runtime Independence
+
+Metadata must work with:
+
+Tinygrad
+
+ONNX
+
+RKNN
+
+Future runtimes
+
+---
+
+## 24. RKNN Compatibility
+
+RKNN execution changes.
+
+Metadata does not.
+
+Meaning must remain identical.
+
+---
+
+## 25. Metadata Versioning
+
+Every metadata file must include:
+
+Version
+
+Timestamp
+
+Model Compatibility
+
+---
+
+## 26. Metadata Hashing
+
+Generate:
+
+metadata_hash.json
+
+Track:
+
+SHA256
+
+Version
+
+Timestamp
+
+---
+
+## 27. Production Rule
+
+Metadata is authoritative.
+
+Runtime must adapt to metadata.
+
+Never the opposite.
+
+---
+
+# Section B — OpenPilot Metadata Architecture
+
+## 28. Vision Model Metadata
+
+Defines:
+
+Image Inputs
+
+Feature Outputs
+
+Path Outputs
+
+Lane Outputs
+
+Road Edge Outputs
+
+Pose Outputs
+
+Hidden State Outputs
+
+---
+
+## 29. Policy Model Metadata
+
+Defines:
+
+Feature Inputs
+
+Desire Inputs
+
+Hidden State Inputs
+
+Trajectory Outputs
+
+Curvature Outputs
+
+Policy Decisions
+
+---
+
+## 30. Hidden State Metadata
+
+Defines:
+
+State Size
+
+State Shape
+
+State Ownership
+
+Persistence
+
+---
+
+## 31. Slice Architecture
+
+Output Tensor
+↓
+Slice Definitions
+↓
+Semantic Outputs
+
+---
+
+## 32. Example Slice Definition
+
+Example:
+
+```text
+path:
+start = 0
+end = 385
+
+lane_left:
+start = 386
+end = 771
+```
+
+Illustrative only.
+
+Always read metadata.
+
+---
+
+## 33. Consumer Architecture
+
+Metadata Consumers:
+
+modeld
+
+parser
+
+planner
+
+UI
+
+loggerd
+
+---
+
+## 34. Metadata Migration
+
+When model updates:
+
+Metadata must update first.
+
+Parser updates second.
+
+---
+
+## 35. Replay Compatibility
+
+Replay validation must use:
+
+Correct metadata version.
+
+---
+
+## 36. Future Compatibility
+
+Metadata should support:
+
+New outputs
+
+New models
+
+New runtimes
+
+Without parser rewrites.
+
+---
+
+# Section C — Validation Specification
+
+## 37. Metadata Discovery Validation
+
+Locate:
+
+Metadata Files
+
+Version
+
+Hashes
+
+Generate:
+
+metadata_inventory.json
+
+---
+
+## 38. Input Validation
+
+Validate:
+
+Input Count
+
+Input Names
+
+Shapes
+
+Layouts
+
+Dtypes
+
+Generate:
+
+input_validation.json
+
+---
+
+## 39. Output Validation
+
+Validate:
+
+Output Count
+
+Output Names
+
+Shapes
+
+Layouts
+
+Dtypes
+
+Generate:
+
+output_validation.json
+
+---
+
+## 40. Slice Validation
+
+Validate:
+
+Start
+
+End
+
+Overlap
+
+Ownership
+
+Generate:
+
+slice_validation.json
+
+---
+
+## 41. Shape Validation
+
+Validate:
+
+Runtime Shape
+
+Metadata Shape
+
+Match Exactly
+
+---
+
+## 42. Layout Validation
+
+Validate:
+
+NCHW
+
+or
+
+NHWC
+
+Match metadata.
+
+---
+
+## 43. Dtype Validation
+
+Validate:
+
+Runtime dtype
+
+Metadata dtype
+
+Match exactly.
+
+---
+
+## 44. Hidden State Validation
+
+Validate:
+
+Shape
+
+Persistence
+
+Reuse
+
+Ownership
+
+Generate:
+
+hidden_state_validation.json
+
+---
+
+## 45. Parser Validation
+
+Validate:
+
+Every metadata output
+
+maps correctly
+
+to parser outputs.
+
+---
+
+## 46. Planner Validation
+
+Validate:
+
+Planner consumes:
+
+correct metadata outputs.
+
+---
+
+## 47. Tinygrad Validation
+
+Reference:
+
+Tinygrad
+
+Metadata must match.
+
+---
+
+## 48. RKNN Validation
+
+Validate:
+
+RKNN outputs
+
+map correctly
+
+through metadata.
+
+---
+
+## 49. Cross-Runtime Validation
+
+Tinygrad
+ONNX
+RKNN
+
+Must produce:
+
+metadata-compatible outputs.
+
+---
+
+## 50. Replay Validation
+
+Replay Route
+↓
+Metadata Parser
+↓
 Planner
 
-Metadata is the bridge between raw tensors and planner behavior.
+Must remain stable.
 
-Treat it as a first-class component.
+---
+
+## 51. Metadata Integrity Validation
+
+Verify:
+
+Hash
+
+Version
+
+Compatibility
+
+Generate:
+
+metadata_integrity.json
+
+---
+
+## 52. Acceptance Criteria
+
+Metadata PASS when:
+
+Inputs PASS
+
+Outputs PASS
+
+Slices PASS
+
+Shapes PASS
+
+Layouts PASS
+
+Hidden State PASS
+
+Planner PASS
+
+---
+
+# Section D — AI Agent Operating Manual
+
+## 53. Discovery Workflow
+
+Discover:
+
+Metadata Files
+
+Versions
+
+Hashes
+
+Inputs
+
+Outputs
+
+Slices
+
+Generate:
+
+metadata_analysis.json
+
+---
+
+## 54. Runtime Port Workflow
+
+Discover Metadata
+↓
+Validate Shapes
+↓
+Validate Layouts
+↓
+Validate Outputs
+↓
+Validate Hidden State
+↓
+Validate Planner
+↓
+Deploy
+
+---
+
+## 55. Fork Adaptation Rules
+
+Never assume:
+
+Output Indices
+
+Slice Positions
+
+Tensor Shapes
+
+Layouts
+
+Metadata Paths
+
+Discover dynamically.
+
+---
+
+## 56. RKNN Porting Workflow
+
+Metadata Discovery
+↓
+Vision Validation
+↓
+Policy Validation
+↓
+Parser Validation
+↓
+Planner Validation
+
+---
+
+## 57. Allowed Modifications
+
+Metadata Readers
+
+Validation Tools
+
+Parser Adapters
+
+Reporting Tools
+
+---
+
+## 58. Avoid Modifications
+
+Metadata Semantics
+
+Planner Semantics
+
+Output Meanings
+
+Unless metadata version changes.
+
+---
+
+## 59. Reporting Requirements
+
+Generate:
+
+metadata_inventory.json
+
+metadata_analysis.json
+
+input_validation.json
+
+output_validation.json
+
+slice_validation.json
+
+hidden_state_validation.json
+
+metadata_integrity.json
+
+---
+
+## 60. Troubleshooting
+
+Wrong Path Output
+
+Wrong Lane Output
+
+Wrong Hidden State
+
+Shape Mismatch
+
+Layout Mismatch
+
+Metadata Version Mismatch
+
+Parser Failure
+
+Planner Failure
+
+Document root cause and fix.
+
+---
+
+## 61. Failure Modes
+
+Missing Metadata
+
+Wrong Shape
+
+Wrong Layout
+
+Wrong Slice
+
+Wrong Hidden State
+
+Wrong Parser Mapping
+
+Planner Instability
+
+---
+
+## 62. Production Readiness
+
+Required:
+
+Metadata PASS
+
+Parser PASS
+
+Planner PASS
+
+Replay PASS
+
+Integrity PASS
+
+Cross-Runtime PASS
+
+---
+
+## 63. Final Checklist
+
+Metadata Located
+[ ]
+
+Version Verified
+[ ]
+
+Hash Verified
+[ ]
+
+Inputs Valid
+[ ]
+
+Outputs Valid
+[ ]
+
+Slices Valid
+[ ]
+
+Hidden State Valid
+[ ]
+
+Parser Valid
+[ ]
+
+Planner Valid
+[ ]
+
+Replay Valid
+[ ]
+
+Result:
+
+PASS / FAIL
