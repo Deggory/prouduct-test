@@ -1,76 +1,797 @@
-# OPENPILOT_ARCHITECTURE.MD
+# OPENPILOT_ARCHITECTURE.MD (Authoritative Version)
 
-# OpenPilot Architecture Reference
+# Engineering Specification + Validation Specification + AI Agent Operating Manual
 
-Version: 1.0
+Version: 3.0
 
-Purpose:
+Target Platforms:
 
-Provide a system-level architecture reference for AI agents modifying:
-
-* openpilot
-* sunnypilot
-* frogpilot
+* OpenPilot
+* Sunnypilot
+* FrogPilot
 * OPKR
 * KisaPilot
+* RK3588 OpenPilot Ports
 
 Target Hardware:
 
-* Comma Devices
+* Comma 3X
 * RK3588
-* RK3588S
 * Orange Pi 5
 * Orange Pi 5 Plus
 
+Target Runtime:
+
+* Tinygrad
+* ONNX Runtime
+* RKNN
+
 ---
 
-# 1. Overview
+# Section A — Engineering Specification
 
-OpenPilot is a distributed real-time driving system.
+## 1. Objective
+
+This document defines:
+
+* OpenPilot architecture
+* Process architecture
+* Message architecture
+* Camera architecture
+* Model architecture
+* Planning architecture
+* Controls architecture
+* Hardware abstraction
+* AI-agent repository analysis
+
+Goal:
+
+Provide a complete architectural map of OpenPilot-derived systems.
+
+---
+
+## 2. OpenPilot Philosophy
+
+OpenPilot is a distributed real-time system.
 
 It is not:
 
-* a single process
-* a single neural network
-* a single executable
+A single application.
 
-OpenPilot is a collection of cooperating daemons communicating through message buses.
+It is:
+
+Many cooperating processes communicating through message buses.
 
 ---
 
-# 2. High-Level Architecture
+## 3. High-Level System Architecture
 
+Camera
+↓
+VisionIPC
+↓
+modeld
+↓
+modelV2
+↓
+plannerd
+↓
+controlsd
+↓
+Car Interface
+↓
 Vehicle
 
-↓
+Supporting systems:
 
-Sensors
+UI
 
-↓
+loggerd
 
-Camera Pipeline
+calibrationd
 
-↓
+sensord
 
-Model Pipeline
+manager
 
-↓
+---
+
+## 4. Core Architecture Layers
+
+Layer 1
+
+Hardware
+
+Layer 2
+
+Drivers
+
+Layer 3
+
+Transport
+
+Layer 4
+
+Perception
+
+Layer 5
 
 Planning
 
-↓
+Layer 6
 
 Controls
 
-↓
+Layer 7
 
-Vehicle
+UI
 
 ---
 
-# 3. Core Subsystems
+## 5. OpenPilot Repository Architecture
 
-Primary subsystems:
+Major directories:
+
+```text
+selfdrive/
+system/
+cereal/
+common/
+msgq/
+opendbc/
+tools/
+third_party/
+```
+
+Each subsystem has ownership boundaries.
+
+---
+
+## 6. Process Architecture
+
+Major processes:
+
+manager
+
+camerad
+
+modeld
+
+plannerd
+
+controlsd
+
+ui
+
+loggerd
+
+calibrationd
+
+radard
+
+---
+
+## 7. Manager Architecture
+
+manager.py
+
+Responsibilities:
+
+Process startup
+
+Process monitoring
+
+Restart policies
+
+Health checks
+
+Manager is the root supervisor.
+
+---
+
+## 8. Camera Architecture
+
+Camera
+↓
+camerad
+↓
+VisionIPC
+
+Responsibilities:
+
+Capture
+
+Timestamp
+
+Publish
+
+---
+
+## 9. VisionIPC Architecture
+
+VisionIPC transports:
+
+Road Camera
+
+Wide Camera
+
+Driver Camera
+
+Frames
+
+Metadata
+
+Timestamps
+
+VisionIPC does not perform inference.
+
+---
+
+## 10. Message Architecture
+
+OpenPilot uses:
+
+cereal
+
+msgq
+
+Messages are the system contract.
+
+---
+
+## 11. Cereal Architecture
+
+Defines:
+
+Schemas
+
+Messages
+
+Types
+
+Serialization
+
+---
+
+## 12. MsgQ Architecture
+
+Provides:
+
+Publisher
+
+Subscriber
+
+Transport
+
+Synchronization
+
+---
+
+## 13. Message Philosophy
+
+Processes should communicate through:
+
+Messages
+
+not direct function calls.
+
+---
+
+## 14. Perception Architecture
+
+Camera
+↓
+VisionIPC
+↓
+modeld
+
+Perception generates:
+
+Path
+
+Lanes
+
+Road Edges
+
+Lead Vehicles
+
+Pose
+
+---
+
+## 15. Modeld Architecture
+
+Responsibilities:
+
+Preprocessing
+
+Tensor Generation
+
+Inference
+
+Output Parsing
+
+Publishing
+
+---
+
+## 16. Model Pipeline
+
+NV12
+↓
+loadyuv.cl
+↓
+transform.cl
+↓
+Tensor
+↓
+Vision Model
+↓
+Policy Model
+↓
+modelV2
+
+---
+
+## 17. Metadata Architecture
+
+Model
+↓
+Metadata
+↓
+Parser
+↓
+modelV2
+
+Metadata defines output meaning.
+
+---
+
+## 18. Planner Architecture
+
+Planner consumes:
+
+modelV2
+
+Planner generates:
+
+Trajectory
+
+Desired Curvature
+
+Future Vehicle Path
+
+---
+
+## 19. Controls Architecture
+
+Planner
+↓
+controlsd
+↓
+Vehicle Commands
+
+Controls execute planner intent.
+
+---
+
+## 20. Vehicle Interface Architecture
+
+Vehicle Interface
+
+Abstracts:
+
+CAN
+
+Steering
+
+Braking
+
+Acceleration
+
+Vehicle-specific behavior.
+
+---
+
+## 21. Car Interface Architecture
+
+Car Interface converts:
+
+Planner Commands
+
+into
+
+Vehicle Commands
+
+---
+
+## 22. UI Architecture
+
+Consumes:
+
+modelV2
+
+carState
+
+controlsState
+
+Displays:
+
+Camera Preview
+
+Path
+
+Lanes
+
+Alerts
+
+---
+
+## 23. Logger Architecture
+
+Records:
+
+Messages
+
+Camera Streams
+
+Events
+
+Logs
+
+---
+
+## 24. Replay Architecture
+
+Recorded Route
+↓
+Replay
+↓
+VisionIPC
+↓
+modeld
+↓
+Planner
+
+Replay enables offline validation.
+
+---
+
+## 25. Calibration Architecture
+
+Consumes:
+
+Camera Data
+
+Vehicle Motion
+
+Produces:
+
+Calibration Parameters
+
+---
+
+## 26. Sensor Architecture
+
+Sensors include:
+
+Camera
+
+IMU
+
+GPS
+
+Vehicle Signals
+
+---
+
+## 27. Hardware Abstraction
+
+OpenPilot separates:
+
+Hardware
+
+from
+
+Planner Logic
+
+through abstraction layers.
+
+---
+
+## 28. Runtime Architecture
+
+Possible runtimes:
+
+Tinygrad
+
+ONNX Runtime
+
+RKNN
+
+Model outputs must remain compatible.
+
+---
+
+## 29. RK3588 Architecture
+
+IMX415
+↓
+RKISP
+↓
+NV12 DMA-BUF
+↓
+VisionIPC
+↓
+OpenCL
+↓
+RKNN
+↓
+Planner
+
+---
+
+## 30. Production Architecture
+
+IMX415
+↓
+RKISP
+↓
+DMA-BUF
+├──────────────┬──────────────┐
+│              │              │
+▼              ▼              ▼
+VisionIPC    EGLImage       loggerd
+↓              ↓
+OpenCL       Mali GPU
+↓              ↓
+RKNN         UI
+↓
+modelV2
+↓
+Planner
+↓
+Controls
+
+---
+
+# Section B — Message Architecture
+
+## 31. Message Ownership
+
+Each process owns:
+
+Published Messages
+
+Consumes:
+
+Subscribed Messages
+
+---
+
+## 32. Core Messages
+
+Examples:
+
+modelV2
+
+carState
+
+controlsState
+
+cameraOdometry
+
+liveCalibration
+
+pandaStates
+
+---
+
+## 33. Message Validation
+
+Validate:
+
+Schema
+
+Units
+
+Frequency
+
+Timestamp
+
+---
+
+## 34. Planner Messages
+
+Planner consumes:
+
+modelV2
+
+Planner publishes:
+
+trajectory-related outputs
+
+---
+
+## 35. Controls Messages
+
+Controls consumes:
+
+Planner outputs
+
+Vehicle state
+
+---
+
+## 36. UI Messages
+
+UI consumes:
+
+Perception
+
+Planning
+
+Vehicle
+
+Alert messages
+
+---
+
+## 37. Logging Messages
+
+Logger consumes:
+
+Nearly everything.
+
+---
+
+## 38. Replay Messages
+
+Replay reproduces:
+
+Recorded messages
+
+for validation.
+
+---
+
+# Section C — Validation Specification
+
+## 39. Repository Discovery
+
+Discover:
+
+Processes
+
+Messages
+
+Models
+
+Metadata
+
+Generate:
+
+architecture_inventory.json
+
+---
+
+## 40. Process Validation
+
+Validate:
+
+Started
+
+Alive
+
+Healthy
+
+Generate:
+
+process_validation.json
+
+---
+
+## 41. Message Validation
+
+Validate:
+
+Schemas
+
+Units
+
+Frequency
+
+Generate:
+
+message_validation.json
+
+---
+
+## 42. Camera Validation
+
+Validate:
+
+Capture
+
+VisionIPC
+
+Timing
+
+---
+
+## 43. Model Validation
+
+Validate:
+
+Tensor Generation
+
+Metadata
+
+Inference
+
+---
+
+## 44. Planner Validation
+
+Validate:
+
+Planner Alive
+
+Stable Outputs
+
+---
+
+## 45. Controls Validation
+
+Validate:
+
+Commands
+
+Timing
+
+Safety
+
+---
+
+## 46. UI Validation
+
+Validate:
+
+Preview
+
+Overlay
+
+Alerts
+
+---
+
+## 47. Logger Validation
+
+Validate:
+
+Logs
+
+Routes
+
+Message Recording
+
+---
+
+## 48. Replay Validation
+
+Replay Route
+↓
+Modeld
+↓
+Planner
+
+Validate outputs.
+
+---
+
+## 49. Latency Validation
+
+Measure:
 
 Camera
 
@@ -80,773 +801,314 @@ Planning
 
 Controls
 
-Logging
-
 UI
-
-Vehicle Interface
-
-Each subsystem should be modified independently.
-
----
-
-# 4. Data Flow
-
-Typical flow:
-
-Camera
-
-↓
-
-camerad
-
-↓
-
-VisionIPC
-
-↓
-
-modeld
-
-↓
-
-plannerd
-
-↓
-
-controlsd
-
-↓
-
-CAN Messages
-
-↓
-
-Vehicle
-
----
-
-# 5. Camera Subsystem
-
-Responsibilities:
-
-* Camera acquisition
-* Frame buffering
-* Frame publication
-
-Outputs:
-
-VisionIPC streams
-
----
-
-# 6. camerad
-
-Typical responsibilities:
-
-* Camera initialization
-* Camera synchronization
-* VisionIPC publication
-
-camerad should not perform inference.
-
----
-
-# 7. VisionIPC
-
-Responsibilities:
-
-* Shared memory transport
-* Frame synchronization
-* Stream management
-
-VisionIPC connects:
-
-Camera
-
-↓
-
-modeld
-
-↓
-
-UI
-
----
-
-# 8. modeld
-
-modeld is the perception engine.
-
-Responsibilities:
-
-* Frame preprocessing
-* Tensor preparation
-* Model execution
-* Output parsing
-* Message publication
-
----
-
-# 9. modeld Pipeline
-
-Typical flow:
-
-VisionIPC
-
-↓
-
-loadyuv.cl
-
-↓
-
-transform.cl
-
-↓
-
-DrivingModelFrame.prepare()
-
-↓
-
-Inference
-
-↓
-
-Metadata Parsing
-
-↓
-
-modelV2
-
----
-
-# 10. AI Model Responsibilities
-
-Models estimate:
-
-* path
-* lanes
-* road edges
-* lead vehicles
-* driving features
-
-Models do not directly control the vehicle.
-
----
-
-# 11. Planner Overview
-
-Planner consumes:
-
-model outputs
-
-vehicle state
-
-driver inputs
-
-Planner generates:
-
-desired trajectory
-
----
-
-# 12. plannerd
-
-Responsibilities:
-
-* trajectory generation
-* path selection
-* maneuver planning
-
-Inputs:
-
-modelV2
-
-carState
-
-other system messages
-
----
-
-# 13. Controls Overview
-
-Controls converts:
-
-desired trajectory
-
-into
-
-steering
-
-acceleration
-
-braking commands
-
----
-
-# 14. controlsd
-
-Responsibilities:
-
-* lateral control
-* longitudinal control
-* safety checks
-
-Outputs:
-
-CAN commands
-
----
-
-# 15. Vehicle Interface
-
-Responsibilities:
-
-* CAN communication
-* vehicle fingerprinting
-* vehicle parameters
-
-Examples:
-
-wheelbase
-
-steer ratio
-
-vehicle mass
-
----
-
-# 16. loggerd
-
-Responsibilities:
-
-* route recording
-* log recording
-* event recording
-
-Used heavily during validation.
-
----
-
-# 17. UI Overview
-
-Responsibilities:
-
-* camera preview
-* path visualization
-* alerts
-* status display
-
-UI correctness does not imply model correctness.
-
----
-
-# 18. Messaging Architecture
-
-OpenPilot uses message passing.
-
-Processes should not communicate through:
-
-global variables
-
-shared mutable state
-
-Instead:
-
-messages
-
-should be used.
-
----
-
-# 19. Common Messages
-
-Examples:
-
-carState
-
-carControl
-
-modelV2
-
-cameraOdometry
-
-controlsState
-
-selfdriveState
-
----
-
-# 20. Message Ownership
-
-Each message has:
-
-Producer
-
-Consumer
-
-Schema
-
-Units
-
-Never modify message meaning without updating consumers.
-
----
-
-# 21. Process Discovery
-
-AI agents should discover:
-
-Processes
-
-Publishers
-
-Subscribers
-
-before modifying code.
 
 Generate:
 
-process_inventory.json
+latency_report.json
 
 ---
 
-# 22. Camera Data Path
+## 50. System Validation
 
-Typical flow:
+Validate:
 
-IMX415
+End-to-End Stability
 
-↓
+Message Integrity
 
-RKISP
+Timing
 
-↓
-
-NV12
-
-↓
-
-VisionIPC
-
-↓
-
-modeld
+Recovery
 
 ---
 
-# 23. Preprocessing Path
+## 51. Stress Validation
 
-Typical flow:
+1 Hour Minimum
 
-NV12
-
-↓
-
-loadyuv.cl
-
-↓
-
-transform.cl
-
-↓
-
-Tensor
-
-Preprocessing should remain unchanged whenever possible.
-
----
-
-# 24. Model Runtime Layer
-
-Possible runtimes:
-
-Tinygrad
-
-RKNN
-
-ONNX
-
-Future runtimes
-
-All should share:
-
-Metadata
-
-Tensor definitions
-
-Message outputs
-
----
-
-# 25. Metadata Layer
-
-Metadata defines:
-
-Inputs
-
-Outputs
-
-Slices
-
-Hidden states
-
-Features
-
-Metadata is authoritative.
-
----
-
-# 26. Hidden State Layer
-
-Modern models contain memory.
-
-Examples:
-
-features_buffer
-
-hidden_state
-
-transformer cache
-
-Must persist across frames.
-
----
-
-# 27. Planning Inputs
-
-Planner consumes:
-
-modelV2
-
-cameraOdometry
-
-carState
-
-liveParameters
-
-Planner should remain runtime-agnostic.
-
----
-
-# 28. Controls Inputs
-
-Controls consumes:
-
-trajectory
-
-vehicle state
-
-driver state
-
-Controls should not know:
-
-Tinygrad
-
-RKNN
-
-ONNX
-
----
-
-# 29. Logging Inputs
-
-loggerd records:
-
-messages
-
-routes
-
-events
-
-Performance reports should include logger impact.
-
----
-
-# 30. Replay System
-
-Replay allows:
-
-recorded routes
-
-↓
-
-replayed messages
-
-↓
-
-validation
-
-Replay is essential for regression testing.
-
----
-
-# 31. Calibration System
-
-Calibration consumes:
-
-camera geometry
-
-vehicle motion
-
-Camera changes often require recalibration.
-
----
-
-# 32. Process Lifecycle
-
-Typical startup:
-
-manager.py
-
-↓
-
-camerad
-
-↓
-
-modeld
-
-↓
-
-plannerd
-
-↓
-
-controlsd
-
-↓
-
-UI
-
----
-
-# 33. manager.py
-
-manager.py supervises:
-
-process start
-
-process stop
-
-health monitoring
-
-restart behavior
-
----
-
-# 34. Health Monitoring
+4 Hours Preferred
 
 Monitor:
 
-Alive status
+Latency
 
-Message frequency
+Memory
 
-Error counts
-
-Generate:
-
-health_report.json
+Temperature
 
 ---
 
-# 35. Failure Domains
+## 52. Recovery Validation
 
-Camera Failure
+Restart:
 
-↓
+Camera
 
-VisionIPC Failure
+Modeld
 
-↓
+Planner
 
-modeld Failure
+UI
 
-↓
-
-Planner Failure
-
-↓
-
-Controls Failure
-
-Failures should be isolated.
+Verify recovery.
 
 ---
 
-# 36. RK3588 Integration Point
+## 53. Acceptance Criteria
 
-Recommended modifications:
+Camera PASS
 
-Camera Layer
+Messages PASS
 
-modeld Layer
+Model PASS
 
-Runtime Layer
+Planner PASS
 
-Avoid:
+Controls PASS
 
-Planner changes
-
-Controls changes
-
-unless absolutely necessary.
+Replay PASS
 
 ---
 
-# 37. AI Agent Modification Rules
+# Section D — AI Agent Operating Manual
 
-Before modifying a fork:
+## 54. Repository Discovery Workflow
 
 Discover:
 
-Camera
+Processes
+
+Messages
+
+Models
+
+Metadata
 
 VisionIPC
-
-modeld
 
 Planner
 
 Controls
 
-Metadata
+Generate:
 
-Generate architecture report.
+architecture_analysis.json
 
 ---
 
-# 38. Recommended RK3588 Architecture
+## 55. Fork Analysis Workflow
+
+Repository
+↓
+Process Discovery
+↓
+Message Discovery
+↓
+Model Discovery
+↓
+Metadata Discovery
+↓
+Planner Discovery
+
+---
+
+## 56. Porting Workflow
+
+Hardware Bring-Up
+↓
+Camera Validation
+↓
+Model Validation
+↓
+Planner Validation
+↓
+Performance Validation
+↓
+Deployment
+
+---
+
+## 57. RK3588 Port Workflow
 
 IMX415
-
 ↓
-
 RKISP
-
 ↓
-
-NV12
-
-↓
-
 VisionIPC
-
 ↓
-
-loadyuv.cl
-
+OpenCL
 ↓
-
-transform.cl
-
+RKNN Vision Core 0
 ↓
-
-DrivingModelFrame.prepare()
-
+RKNN Policy Core 1
 ↓
-
-RKNN Vision
-
-↓
-
-RKNN Policy
-
-↓
-
-Metadata Parsing
-
-↓
-
-modelV2
-
-↓
-
-plannerd
-
-↓
-
-controlsd
-
-↓
-
-Vehicle
+Planner
 
 ---
 
-# 39. Validation Flow
+## 58. Fork Adaptation Rules
 
-Camera
+Never assume:
 
-↓
+Paths
 
-VisionIPC
+Process Names
 
-↓
+Message Names
 
-Tensor Validation
+Model Names
 
-↓
+Metadata Locations
 
-RKNN Validation
-
-↓
-
-Planner Validation
-
-↓
-
-Vehicle Validation
-
-Each layer must pass before continuing.
+Discover dynamically.
 
 ---
 
-# 40. Final Architecture Checklist
-
-Camera Pipeline
-
-[ ] PASS
-
-VisionIPC
-
-[ ] PASS
-
-Preprocessing
-
-[ ] PASS
-
-Metadata
-
-[ ] PASS
+## 59. Allowed Modifications
 
 Runtime
 
-[ ] PASS
+Camera Integration
+
+Validation Hooks
+
+Performance Tooling
+
+Deployment Tooling
+
+---
+
+## 60. Avoid Modifications
+
+Planner Semantics
+
+Controls Semantics
+
+Message Semantics
+
+Unless required.
+
+---
+
+## 61. Reporting Requirements
+
+Generate:
+
+architecture_inventory.json
+
+architecture_analysis.json
+
+process_validation.json
+
+message_validation.json
+
+latency_report.json
+
+---
+
+## 62. Troubleshooting
+
+Process Crash
+
+Message Failure
+
+Model Failure
+
+Planner Failure
+
+Controls Failure
+
+Replay Failure
+
+Latency Spike
+
+Document root cause and fix.
+
+---
+
+## 63. Failure Modes
+
+Camera Failure
+
+VisionIPC Failure
+
+Metadata Failure
+
+Model Failure
+
+Planner Failure
+
+Controls Failure
+
+Message Failure
+
+---
+
+## 64. Production Readiness
+
+Required:
+
+Camera PASS
+
+Messages PASS
+
+Model PASS
+
+Planner PASS
+
+Controls PASS
+
+Replay PASS
+
+Latency PASS
+
+Recovery PASS
+
+---
+
+## 65. Final Checklist
+
+Manager
+[ ]
+
+Camera
+[ ]
+
+VisionIPC
+[ ]
+
+Messages
+[ ]
+
+Metadata
+[ ]
+
+Modeld
+[ ]
 
 Planner
-
-[ ] PASS
+[ ]
 
 Controls
+[ ]
 
-[ ] PASS
+UI
+[ ]
 
-Logging
+Logger
 
-[ ] PASS
+[ ]
 
 Replay
+[ ]
 
-[ ] PASS
+Latency
+[ ]
 
-Deployment
-
-[ ] PASS
+Recovery
+[ ]
 
 Result:
 
 PASS / FAIL
-
-This document is the authoritative architecture reference for AI-agent-driven OpenPilot modifications.
