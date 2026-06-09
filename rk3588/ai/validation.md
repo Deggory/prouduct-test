@@ -1,36 +1,75 @@
 # VALIDATION.MD (Authoritative Version)
 
-## Section A — Engineering Specification
+# Engineering Specification + Validation Specification + AI Agent Operating Manual
 
-### 1. Objective
+Version: 2.0
 
-Validation exists to prove:
+Target Hardware:
 
-Camera Integration Correct
-↓
-Preprocessing Correct
-↓
-Model Outputs Correct
-↓
-Planner Behavior Preserved
-↓
-Deployment Safe
+* RK3588
+* RK3588S
+* Orange Pi 5
+* Orange Pi 5 Plus
 
-Validation is not:
+Target Camera:
 
-"The UI looks correct"
+* IMX415
+* RKISP
+* V4L2
+* NV12
+* DMA-BUF
 
-Validation is:
+Target Runtime:
 
-"The tensors, outputs, and planner behavior match the reference implementation."
+* RKNN Vision Core 0
+* RKNN Policy Core 1
+* OpenCL
+* Mali GPU
+* EGLImage
+
+Target Forks:
+
+* openpilot
+* sunnypilot
+* frogpilot
+* OPKR
+* KisaPilot
 
 ---
 
-### 2. Validation Philosophy
+# Section A — Engineering Specification
 
-Every layer must be validated independently.
+## 1. Objective
 
-Failure at any layer invalidates all subsequent layers.
+Validation exists to prove:
+
+Camera Correct
+↓
+VisionIPC Correct
+↓
+Preprocessing Correct
+↓
+Metadata Correct
+↓
+Vision Model Correct
+↓
+Policy Model Correct
+↓
+Planner Correct
+↓
+System Stable
+
+Validation is proof.
+
+UI appearance alone is not validation.
+
+---
+
+## 2. Validation Philosophy
+
+Every layer must pass independently.
+
+Failure at any layer invalidates all higher layers.
 
 Validation order:
 
@@ -42,9 +81,9 @@ Preprocessing
 ↓
 Metadata
 ↓
-Vision Model
+Vision
 ↓
-Policy Model
+Policy
 ↓
 Planner
 ↓
@@ -52,7 +91,7 @@ System
 
 ---
 
-### 3. Golden Reference Philosophy
+## 3. Golden Reference Philosophy
 
 Reference implementation:
 
@@ -60,111 +99,113 @@ Tinygrad
 
 or
 
-Official OpenPilot model pipeline
+Official OpenPilot implementation
 
-All comparisons must use identical inputs.
+All comparisons must use:
+
+Identical Inputs
 
 ---
 
-### 4. Validation Architecture
+## 4. Validation Architecture
 
-Validation System
-
+Discovery
 ↓
-
-Data Collection
-
+Artifact Collection
 ↓
-
-Artifact Generation
-
-↓
-
 Metric Generation
-
 ↓
-
-Acceptance Analysis
-
+Comparison
 ↓
-
-Pass / Fail
+Acceptance
+↓
+PASS / FAIL
 
 ---
 
-### 5. Validation Ownership
+## 5. Validation Ownership
 
-camera.md owns:
+camera.md
 
-* Camera correctness
-* NV12 correctness
-* Warp correctness
+owns:
 
-modeld.md owns:
+Camera Correctness
 
-* Tensor correctness
-* State correctness
+visionipc.md
 
-rknn.md owns:
+owns:
 
-* Runtime correctness
-* RKNN correctness
+Frame Correctness
 
-validation.md owns:
+modeld.md
 
-* Proof
+owns:
+
+Tensor Correctness
+
+rknn.md
+
+owns:
+
+Inference Correctness
+
+validation.md
+
+owns:
+
+Proof
 
 ---
 
-### 6. Artifact Architecture
+## 6. Production Pipeline
 
-Required artifacts:
+IMX415
+↓
+RKISP
+↓
+NV12 DMA-BUF
+├──────────────┬──────────────┐
+│              │              │
+▼              ▼              ▼
+VisionIPC    EGLImage       loggerd
+↓              ↓
+OpenCL       Mali GPU
+↓              ↓
+RKNN         UI
+↓
+modelV2
+↓
+Planner
+
+Every stage must be validated.
+
+---
+
+## 7. Validation Artifacts
+
+Generate:
 
 camera_validation.json
 
 visionipc_validation.json
 
-tensor_validation.json
-
 metadata_validation.json
+
+tensor_validation.json
 
 vision_validation.json
 
 policy_validation.json
 
-runtime_validation.json
-
 planner_validation.json
 
 system_validation.json
 
----
-
-### 7. Dataset Architecture
-
-Required scenarios:
-
-Day
-
-Night
-
-Highway
-
-City
-
-Curves
-
-Shadows
-
-Rain
-
-Tunnel
-
-Construction Zones
+validation_inventory.json
 
 ---
 
-### 8. Dataset Requirements
+## 8. Dataset Requirements
 
 Minimum:
 
@@ -180,7 +221,7 @@ Multiple Routes
 
 ---
 
-### 9. Validation Environment
+## 9. Validation Environments
 
 Replay
 
@@ -192,47 +233,33 @@ Bench Testing
 
 Vehicle Testing
 
-Each environment must be documented.
+All should be documented.
 
 ---
 
-### 10. Validation Layer Ownership
+## 10. Acceptance Philosophy
 
-Layer 1
+PASS
 
-Camera
+means:
 
-Layer 2
+Measured
 
-Preprocessing
+Validated
 
-Layer 3
+Documented
 
-Metadata
-
-Layer 4
-
-Vision
-
-Layer 5
-
-Policy
-
-Layer 6
-
-Planner
-
-Layer 7
-
-System
+Repeatable
 
 ---
 
-## Section B — Camera Validation
+# Section B — Camera Validation
 
-### 11. Camera Discovery Validation
+## 11. Camera Discovery Validation
 
 Validate:
+
+Device
 
 Resolution
 
@@ -248,63 +275,101 @@ camera_inventory.json
 
 ---
 
-### 12. Resolution Validation
+## 12. IMX415 Validation
 
-Record:
+Validate:
+
+Sensor Detected
+
+Resolution Correct
+
+FPS Stable
+
+No Frame Corruption
+
+---
+
+## 13. RKISP Validation
+
+Validate:
+
+ISP Active
+
+Frames Delivered
+
+No ISP Errors
+
+---
+
+## 14. V4L2 Validation
+
+Validate:
+
+Device Node
+
+Format
+
+Buffer Mode
+
+Frame Timing
+
+---
+
+## 15. NV12 Validation
+
+Validate:
 
 Width
 
 Height
 
-FPS
+Stride
 
-Configured
+Plane Offsets
 
-Actual
+Buffer Size
 
----
-
-### 13. NV12 Validation
-
-Validate:
-
-bytesperline
-
-sizeimage
-
-stride
-
-layout
-
-tight vs padded
+Layout
 
 Never assume.
 
 ---
 
-### 14. VisionIPC Validation
+## 16. Tight vs Padded Validation
+
+Detect:
+
+Tight NV12
+
+or
+
+Padded NV12
+
+Record actual layout.
+
+---
+
+## 17. DMA-BUF Validation
 
 Validate:
 
-Frame Arrival
+FD Valid
 
-Frame Integrity
+Import Success
 
-Frame IDs
-
-Timestamps
+Lifetime Correct
 
 No Corruption
 
 Generate:
 
-visionipc_validation.json
+dmabuf_validation.json
 
 ---
 
-### 15. Camera Timing Validation
+## 18. Camera Timing Validation
 
-Record:
+Measure:
 
 Capture
 
@@ -314,59 +379,145 @@ Receive
 
 Latency
 
+Generate:
+
+camera_timing.json
+
 ---
 
-### 16. Warp Validation
+## 19. Overlay Validation
 
 Validate:
 
-Crop
+Preview
 
-Scale
+Path
 
-Alignment
+Lane
 
-Output Geometry
+Road Edge
+
+Lead Vehicle
+
+---
+
+## 20. Camera Acceptance Criteria
+
+Camera PASS
+
+when:
+
+Frames Correct
+
+Timing Correct
+
+No Corruption
+
+---
+
+# Section C — VisionIPC Validation
+
+## 21. Stream Validation
+
+Validate:
+
+Producer
+
+Consumers
+
+Frames Arriving
 
 Generate:
 
-warp_validation.json
+visionipc_inventory.json
 
 ---
 
-### 17. Overlay Validation
+## 22. Timestamp Validation
 
 Validate:
 
-Path Overlay
+Capture
 
-Lane Overlay
+Publish
 
-Road Edge Overlay
+Receive
 
-Lead Vehicle Overlay
+Display
 
----
-
-### 18. Overlay Acceptance Criteria
-
-Overlay must:
-
-Remain Centered
-
-Follow Road Geometry
-
-Remain Stable
-
-No Clipping
-
-No Offset
+Monotonicity required.
 
 ---
 
-## Section C — Preprocessing Validation
+## 23. Frame ID Validation
 
-### 19. OpenCL Validation
+Validate:
+
+Monotonic IDs
+
+No Duplicates
+
+No Unexpected Jumps
+
+---
+
+## 24. Synchronization Validation
+
+Validate:
+
+Ordering
+
+Timing
+
+Consumer Alignment
+
+---
+
+## 25. Replay Validation
+
+Replay Route
+↓
+VisionIPC
+↓
+Modeld
+
+Must match reference behavior.
+
+---
+
+## 26. EGLImage Validation
+
+Validate:
+
+Import
+
+Texture Creation
+
+Preview
+
+Generate:
+
+egl_validation.json
+
+---
+
+## 27. UI Validation
+
+Validate:
+
+Preview
+
+Overlay
+
+Latency
+
+No Artifacts
+
+---
+
+# Section D — Preprocessing Validation
+
+## 28. OpenCL Validation
 
 Validate:
 
@@ -374,11 +525,15 @@ loadyuv.cl
 
 transform.cl
 
-Execution correctness
+Execution Success
+
+Generate:
+
+opencl_validation.json
 
 ---
 
-### 20. Tensor Dump Validation
+## 29. Tensor Validation
 
 Dump:
 
@@ -386,19 +541,15 @@ img
 
 big_img
 
-Record:
+feature tensors
 
-Shape
+Generate:
 
-Layout
-
-Dtype
-
-Statistics
+tensor_validation.json
 
 ---
 
-### 21. Tensor Layout Validation
+## 30. Tensor Layout Validation
 
 Validate:
 
@@ -412,7 +563,7 @@ Record actual layout.
 
 ---
 
-### 22. Tensor Statistics Validation
+## 31. Tensor Statistics Validation
 
 Record:
 
@@ -422,33 +573,51 @@ Max
 
 Mean
 
-Standard Deviation
+Std
 
 Compare with reference.
 
 ---
 
-### 23. Visual Reconstruction Validation
+## 32. Tensor Reconstruction Validation
 
 Tensor
 ↓
-Reconstructed Image
+Image Reconstruction
 
 Inspect:
 
-Cropping
+Crop
 
-Distortion
+Warp
+
+Color
 
 Artifacts
 
-Color Shifts
+---
+
+## 33. Warp Validation
+
+Validate:
+
+Transform Matrix
+
+Crop Region
+
+Scale
+
+Alignment
+
+Generate:
+
+warp_validation.json
 
 ---
 
-## Section D — Metadata Validation
+# Section E — Metadata Validation
 
-### 24. Metadata Discovery
+## 34. Metadata Discovery
 
 Locate:
 
@@ -464,81 +633,99 @@ metadata_inventory.json
 
 ---
 
-### 25. Metadata Validation
+## 35. Metadata Validation
 
 Validate:
 
-Input Count
+Inputs
 
-Output Count
+Outputs
 
 Shapes
 
 Dtypes
 
-Names
-
 Slices
+
+Names
 
 ---
 
-### 26. Slice Validation
+## 36. Slice Validation
 
 Validate:
 
-Start Index
+Start
 
-End Index
+End
 
-Output Ownership
+Ownership
 
 Semantic Meaning
 
 ---
 
-## Section E — Vision Model Validation
+## 37. Metadata Acceptance
 
-### 27. Vision Input Validation
+Metadata must match:
+
+Model
+
+Runtime
+
+Outputs
+
+Exactly.
+
+---
+
+# Section F — Vision Model Validation
+
+## 38. Vision Input Validation
 
 Validate:
 
 Input Count
 
-Shapes
+Shape
 
-Layouts
+Layout
 
-Dtypes
+Dtype
 
 ---
 
-### 28. Vision Output Validation
+## 39. Vision Output Validation
 
 Validate:
 
 Output Count
 
-Shapes
+Shape
 
-Layouts
+Layout
 
-Dtypes
+Dtype
 
 ---
 
-### 29. Vision Comparison
+## 40. Tinygrad vs RKNN Validation
 
 Tinygrad
 ↓
-RKNN
+Reference
 
-Same Inputs
+RKNN
+↓
+Candidate
+
+Same Input
 
 Compare Outputs
 
 ---
 
-### 30. Vision Metrics
+## 41. Vision Metrics
 
 Calculate:
 
@@ -552,7 +739,7 @@ Cosine Similarity
 
 ---
 
-### 31. Vision Acceptance Targets
+## 42. Vision Acceptance Targets
 
 Minimum:
 
@@ -564,9 +751,9 @@ Correlation > 0.999
 
 ---
 
-## Section F — Policy Validation
+# Section G — Policy Validation
 
-### 32. Policy Input Validation
+## 43. Policy Input Validation
 
 Validate:
 
@@ -580,7 +767,7 @@ Curvature Inputs
 
 ---
 
-### 33. Policy Output Validation
+## 44. Policy Output Validation
 
 Validate:
 
@@ -588,15 +775,11 @@ Trajectory
 
 Curvature
 
-Decisions
+Decision Outputs
 
 ---
 
-### 34. Policy Comparison
-
-Tinygrad
-↓
-RKNN
+## 45. Tinygrad vs RKNN Policy Validation
 
 Same Features
 
@@ -604,7 +787,7 @@ Compare Outputs
 
 ---
 
-### 35. Policy Metrics
+## 46. Policy Metrics
 
 MAE
 
@@ -616,7 +799,7 @@ Cosine Similarity
 
 ---
 
-### 36. Policy Acceptance Targets
+## 47. Policy Acceptance Targets
 
 Minimum:
 
@@ -628,107 +811,21 @@ Correlation > 0.999
 
 ---
 
-## Section G — Temporal Validation
+# Section H — Planner Validation
 
-### 37. Hidden State Validation
-
-Validate:
-
-hidden_state
-
-feature_memory
-
-transformer cache
-
-Persistence
-
----
-
-### 38. Multi-Frame Validation
-
-Minimum:
-
-100 Consecutive Frames
-
-Single frame testing prohibited.
-
----
-
-### 39. Feature Buffer Validation
+## 48. Planner Health Validation
 
 Validate:
 
-Reuse
+Alive
 
-Persistence
+Stable
 
-Update Logic
-
----
-
-## Section H — Runtime Validation
-
-### 40. Runtime Validation
-
-Verify:
-
-RKNN Runtime
-
-Toolkit
-
-NPU Availability
-
-Core Assignment
+Responsive
 
 ---
 
-### 41. NPU Validation
-
-Validate:
-
-Core 0
-
-Core 1
-
-Core 2
-
-Assignments
-
-Behavior
-
----
-
-### 42. Runtime API Validation
-
-Validate:
-
-inference()
-
-or
-
-inputs_set()
-
-run()
-
-outputs_get()
-
----
-
-## Section I — Planner Validation
-
-### 43. Planner Health Validation
-
-Planner Alive
-
-Planner Stable
-
-Planner Responsive
-
-No Crashes
-
----
-
-### 44. Planner Output Validation
+## 49. Planner Output Validation
 
 Compare:
 
@@ -742,7 +839,7 @@ Against Reference
 
 ---
 
-### 45. Message Validation
+## 50. Message Validation
 
 Validate:
 
@@ -750,77 +847,109 @@ modelV2
 
 cameraOdometry
 
-Related Outputs
+Units
 
 Schemas
 
-Units
+Frequency
 
 ---
 
-## Section J — System Validation
+## 51. Overlay Validation
 
-### 46. Latency Validation
+Validate:
 
-Record:
+Overlay Stability
 
-Camera
+Alignment
 
-Preprocessing
+Road Tracking
 
-Inference
-
-Parsing
-
-Publishing
-
-Total
+No Clipping
 
 ---
 
-### 47. FPS Validation
+# Section I — System Validation
+
+## 52. Latency Validation
 
 Measure:
 
-Input FPS
+Camera
 
-Inference FPS
+VisionIPC
 
-Published FPS
+OpenCL
+
+Vision
+
+Policy
+
+Publish
+
+Planner
+
+UI
+
+Generate:
+
+latency_report.json
 
 ---
 
-### 48. Memory Validation
+## 53. FPS Validation
 
-Run:
+Measure:
 
-30 Minutes Minimum
+Average FPS
 
-Record:
+Minimum FPS
+
+Maximum FPS
+
+95%
+
+99%
+
+---
+
+## 54. Memory Validation
+
+Measure:
 
 RSS
 
 Virtual Memory
 
-Tensor Allocation Count
+Allocation Count
+
+Leaks
+
+Generate:
+
+memory_validation.json
 
 ---
 
-### 49. Thermal Validation
+## 55. Thermal Validation
 
-Record:
+Measure:
 
-CPU Temperature
+CPU
 
-GPU Temperature
+GPU
 
-NPU Temperature
+NPU
 
-No throttling permitted.
+Board
+
+Generate:
+
+thermal_validation.json
 
 ---
 
-### 50. Long Duration Validation
+## 56. Stress Validation
 
 Minimum:
 
@@ -828,43 +957,57 @@ Minimum:
 
 Preferred:
 
-4+ Hours
+4 Hours
+
+Monitor:
+
+Latency
+
+Memory
+
+Temperature
+
+FPS
 
 ---
 
-### 51. Recovery Validation
+## 57. Recovery Validation
 
-Camera Disconnect
+Validate:
+
+Camera Restart
+
+Replay Restart
 
 Runtime Restart
 
-Process Restart
-
 Model Reload
 
-System must recover.
+Recovery Success
 
 ---
 
-### 52. Failure Injection
+## 58. Failure Injection
 
 Simulate:
 
-Corrupt Model
+Corrupt Metadata
 
-Missing Metadata
+Corrupt Model
 
 Invalid Tensor
 
+DMA-BUF Failure
+
 Runtime Failure
 
-Validate safe failure.
+Validate safe behavior.
 
 ---
 
-## Section K — AI Agent Operating Manual
+# Section J — AI Agent Operating Manual
 
-### 53. Repository Discovery Workflow
+## 59. Discovery Workflow
 
 Discover:
 
@@ -872,37 +1015,27 @@ Camera
 
 VisionIPC
 
+OpenCL
+
 Metadata
 
-Runtime
+Modeld
+
+RKNN
 
 Planner
 
+UI
+
 Generate:
 
-validation_analysis.json
+validation_inventory.json
 
 ---
 
-### 54. Fork Adaptation Rules
+## 60. Validation Workflow
 
-Never assume:
-
-Paths
-
-Model Names
-
-Metadata Locations
-
-Environment Variables
-
-Discover dynamically.
-
----
-
-### 55. Validation Workflow
-
-Discover
+Discovery
 ↓
 Camera
 ↓
@@ -922,53 +1055,103 @@ System
 
 ---
 
-### 56. Reporting Requirements
+## 61. Fork Adaptation Rules
+
+Never assume:
+
+Paths
+
+Model Names
+
+Metadata Locations
+
+Runtime Layout
+
+Environment Variables
+
+Discover dynamically.
+
+---
+
+## 62. Reporting Requirements
 
 Generate:
 
 camera_validation.json
 
+visionipc_validation.json
+
+tensor_validation.json
+
+metadata_validation.json
+
 vision_validation.json
 
 policy_validation.json
-
-runtime_validation.json
-
-latency_validation.json
 
 planner_validation.json
 
 system_validation.json
 
-validation_analysis.json
+latency_report.json
+
+validation_inventory.json
 
 ---
 
-### 57. Failure Modes
+## 63. Troubleshooting
 
-Overlay Failure
+Wrong Overlay
+
+Tensor Mismatch
+
+Metadata Mismatch
+
+Replay Failure
+
+DMA-BUF Failure
+
+EGL Failure
+
+Planner Instability
+
+Memory Leak
+
+Thermal Issues
+
+Document root cause and fix.
+
+---
+
+## 64. Failure Modes
+
+Camera Failure
+
+VisionIPC Failure
 
 Tensor Failure
 
 Metadata Failure
 
-Runtime Failure
+Vision Failure
+
+Policy Failure
 
 Planner Failure
 
-Memory Leak
-
-Thermal Throttling
-
-Recovery Failure
+System Failure
 
 ---
 
-### 58. Production Readiness
+## 65. Production Readiness
 
 Required:
 
 Camera PASS
+
+VisionIPC PASS
+
+OpenCL PASS
 
 Metadata PASS
 
@@ -977,8 +1160,6 @@ Vision PASS
 Policy PASS
 
 Planner PASS
-
-Runtime PASS
 
 Latency PASS
 
@@ -990,7 +1171,7 @@ Recovery PASS
 
 ---
 
-### 59. Production Validation Gate
+## 66. Production Gate
 
 Deployment prohibited until:
 
@@ -1000,18 +1181,21 @@ No exceptions.
 
 ---
 
-### 60. Final Checklist
+## 67. Final Checklist
 
 Camera
-[ ]
-
-NV12
 [ ]
 
 VisionIPC
 [ ]
 
-Warp
+DMA-BUF
+[ ]
+
+EGLImage
+[ ]
+
+OpenCL
 [ ]
 
 Metadata
@@ -1023,13 +1207,13 @@ Vision
 Policy
 [ ]
 
-Runtime
-[ ]
-
 Planner
 [ ]
 
 Latency
+[ ]
+
+FPS
 [ ]
 
 Memory
