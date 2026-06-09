@@ -1,280 +1,217 @@
 # PERFORMANCE.MD (Authoritative Version)
 
-## Section A — Engineering Specification
+# Engineering Specification + Validation Specification + AI Agent Operating Manual
 
-### 1. Objective
+Version: 2.0
 
-Performance exists to ensure:
+Target Hardware:
 
-Stable Camera Timing
-↓
-Stable Inference Timing
-↓
-Stable Planner Timing
-↓
-Predictable Vehicle Behavior
+* RK3588
+* RK3588S
+* Orange Pi 5
+* Orange Pi 5 Plus
 
-Performance is not:
+Target Camera:
 
-Maximum FPS
+* IMX415
+* RKISP
+* V4L2
 
-Performance is:
+Target Runtime:
 
-Consistency
+* RKNN Vision Core 0
+* RKNN Policy Core 1
+* Mali-G610 GPU
+* OpenCL preprocessing
+* DMA-BUF
+* EGLImage
+
+Target Forks:
+
+* openpilot
+* sunnypilot
+* frogpilot
+* OPKR
+* KisaPilot
 
 ---
 
-### 2. Performance Philosophy
+# Section A — Engineering Specification
 
-Priority Order:
+## 1. Objective
+
+Performance exists to ensure:
 
 Correctness
 ↓
 Stability
 ↓
-Latency
+Low Latency
 ↓
-FPS
+High Throughput
 
-Never sacrifice correctness for benchmark numbers.
+Correctness always has higher priority than FPS.
 
 ---
 
-### 3. Reference Pipeline
+## 2. Performance Philosophy
+
+Never optimize:
+
+Before Validation
+
+Never optimize:
+
+Before Stability
+
+Optimization order:
+
+Correctness
+↓
+Validation
+↓
+Stability
+↓
+Performance
+
+---
+
+## 3. Production Architecture
+
+Target architecture:
 
 IMX415
 ↓
 RKISP
 ↓
+NV12 DMA-BUF
+├──────────────┬───────────────┐
+│              │               │
+▼              ▼               ▼
+VisionIPC    EGLImage       loggerd
+↓              ↓
+OpenCL       Mali GPU
+↓              ↓
+RKNN         UI
+↓
+modelV2/msgq
+↓
+planner
+↓
+controls
+
+---
+
+## 4. Performance Ownership
+
+camera.md
+
+owns:
+
+* camera timing
+* capture latency
+
+visionipc.md
+
+owns:
+
+* transport latency
+* DMA-BUF transport
+
+modeld.md
+
+owns:
+
+* preprocessing timing
+* tensor timing
+
+rknn.md
+
+owns:
+
+* inference timing
+* NPU utilization
+
+performance.md
+
+owns:
+
+* measurement
+* benchmarking
+* optimization
+* acceptance
+
+---
+
+## 5. Performance Layers
+
+Layer 1
+
+Camera
+
+Layer 2
+
 VisionIPC
-↓
-loadyuv.cl
-↓
-transform.cl
-↓
-DrivingModelFrame.prepare()
-↓
-RKNN Vision
-↓
-RKNN Policy
-↓
-Planner
-↓
-Controls
 
-Every stage contributes latency.
+Layer 3
 
----
+Preprocessing
 
-### 4. Performance Ownership
+Layer 4
 
-camera.md owns:
-
-Camera Performance
-
-modeld.md owns:
-
-Tensor Performance
-
-rknn.md owns:
-
-Inference Performance
-
-performance.md owns:
-
-Measurement
-
-Optimization
-
-Benchmarking
-
-Acceptance
-
----
-
-### 5. Benchmark Philosophy
-
-All benchmarks must be:
-
-Repeatable
-
-Comparable
-
-Versioned
-
-Reproducible
-
----
-
-### 6. Benchmark Artifacts
-
-Generate:
-
-timing_report.json
-
-throughput_report.json
-
-latency_report.json
-
-memory_report.json
-
-thermal_report.json
-
-npu_report.json
-
-performance_analysis.json
-
----
-
-### 7. Benchmark Dataset Requirements
-
-Replay Route
-
-Recorded Video
-
-Live Camera
-
-Minimum:
-
-1000 Frames
-
-Preferred:
-
-10000+ Frames
-
----
-
-### 8. Performance Environment
-
-Record:
-
-Repository
-
-Commit
-
-Runtime
-
-Kernel
-
-CPU Governor
-
-NPU Version
-
-Temperature
-
-Power Source
-
----
-
-### 9. Orange Pi 5 Reference Targets
-
-Expected:
-
-Camera
-
-3–5 ms
-
-OpenCL
-
-3–6 ms
-
-Vision RKNN
-
-8–12 ms
-
-Policy RKNN
-
-2–5 ms
-
-Publishing
-
-1–2 ms
-
-Total
-
-17–30 ms
-
-Expected FPS
-
-20–30 FPS
-
-These targets come directly from the RK3588 performance baseline.
-
----
-
-### 10. Latency Architecture
-
-Camera
-↓
-Preprocess
-↓
 Inference
-↓
-Parsing
-↓
+
+Layer 5
+
 Publishing
 
-Every stage must be measured.
+Layer 6
+
+Planner
+
+Layer 7
+
+UI
+
+Each layer must be measured independently.
 
 ---
 
-### 11. End-to-End Budget
-
-Target:
-
-<35 ms
-
-Acceptable:
-
-<50 ms
-
-Preferred:
-
-<30 ms
-
----
-
-### 12. Frame Timing Architecture
-
-Capture Start
-
-Capture End
-
-Preprocess Start
-
-Preprocess End
-
-Inference Start
-
-Inference End
-
-Publish Time
-
-Every frame should record timestamps.
-
----
-
-### 13. Throughput Architecture
+## 6. Latency Philosophy
 
 Measure:
 
-Average FPS
+Average
 
-Minimum FPS
+Median
 
-Maximum FPS
+95%
 
-95th Percentile FPS
+99%
 
-99th Percentile FPS
+Maximum
+
+Average latency alone is insufficient.
 
 ---
 
-### 14. Jitter Architecture
+## 7. Throughput Philosophy
 
 Measure:
 
-Frame-to-frame variation
+FPS
+
+Frame Drops
+
+Queue Depth
+
+Processing Rate
+
+---
+
+## 8. Jitter Philosophy
+
+Low jitter is often more important than high FPS.
 
 Target:
 
@@ -284,11 +221,163 @@ Preferred:
 
 <2 ms
 
-Large jitter is often more damaging than low FPS.
+---
+
+## 9. Orange Pi 5 Performance Targets
+
+Current Baseline:
+
+Camera → modelV2
+
+18–30 ms
+
+Current UI:
+
+30–45 ms
 
 ---
 
-### 15. CPU Architecture
+## 10. DMA-BUF Targets
+
+Expected:
+
+Camera → modelV2
+
+15–27 ms
+
+Gain:
+
+1–4 ms
+
+---
+
+## 11. DMA-BUF + EGL Targets
+
+Expected:
+
+Camera → modelV2
+
+15–27 ms
+
+Camera → UI
+
+20–35 ms
+
+Gain:
+
+3–8 ms
+
+---
+
+## 12. FPS Targets
+
+Minimum:
+
+20 FPS
+
+Target:
+
+30 FPS
+
+Preferred:
+
+40+ FPS
+
+without violating latency targets.
+
+---
+
+## 13. End-to-End Budget
+
+Target:
+
+<30 ms
+
+Acceptable:
+
+<40 ms
+
+Maximum:
+
+50 ms
+
+---
+
+## 14. Camera Budget
+
+Capture:
+
+3–5 ms
+
+Target.
+
+---
+
+## 15. VisionIPC Budget
+
+Transport:
+
+1–2 ms
+
+Target.
+
+---
+
+## 16. OpenCL Budget
+
+loadyuv.cl
+
+transform.cl
+
+Combined:
+
+3–6 ms
+
+Target.
+
+---
+
+## 17. Vision RKNN Budget
+
+Vision Core 0
+
+Target:
+
+8–12 ms
+
+---
+
+## 18. Policy RKNN Budget
+
+Policy Core 1
+
+Target:
+
+2–5 ms
+
+---
+
+## 19. Publish Budget
+
+modelV2/msgq
+
+Target:
+
+1–2 ms
+
+---
+
+## 20. UI Budget
+
+GPU Render
+
+Target:
+
+3–12 ms
+
+---
+
+## 21. CPU Architecture
 
 RK3588:
 
@@ -296,11 +385,15 @@ RK3588:
 
 4× Cortex-A55
 
-A76 cluster preferred.
+Production:
+
+Prefer A76
 
 ---
 
-### 16. CPU Affinity Strategy
+## 22. CPU Affinity
+
+Recommended:
 
 modeld
 
@@ -308,149 +401,147 @@ modeld
 
 CPU4-CPU7
 
-Only
-
-Avoid migration to A55 cores.
+Avoid A55 migration.
 
 ---
 
-### 17. CPU Pinning
+## 23. Scheduler Policy
 
-Recommended:
-
-sched_setaffinity()
-
-Benefits:
-
-Reduced Migration
-
-Lower Jitter
-
-More Predictable Timing
-
----
-
-### 18. Scheduler Architecture
-
-Default
-
-SCHED_RR
+Optional:
 
 SCHED_FIFO
 
-Real-time scheduling allowed only after validation.
-
----
-
-### 19. Real-Time Policy
-
-Priority Range:
+Priority:
 
 50–60
 
-Validate carefully.
-
-Incorrect priorities can destabilize systems.
+Only after validation.
 
 ---
 
-### 20. Memory Architecture
-
-Persistent Buffers
-
-Buffer Reuse
-
-Avoid Per-Frame Allocation
-
-Minimize Fragmentation
-
----
-
-### 21. Buffer Ownership
-
-Image Buffers
-
-Feature Buffers
-
-Hidden State Buffers
-
-Inference Buffers
-
-Ownership documented.
-
----
-
-### 22. NPU Architecture
+## 24. NPU Architecture
 
 Core 0
-
-Core 1
-
-Core 2
-
-Independent execution units.
-
----
-
-### 23. NPU Assignment
 
 Vision
 
-↓
-
-Core 0
+Core 1
 
 Policy
 
-↓
-
-Core 1
-
 Core 2
-
-↓
 
 Reserved
 
 ---
 
-### 24. Core Sharing Policy
+## 25. NPU Assignment Rule
 
-Forbidden:
+Never share:
 
-Vision + Policy sharing the same NPU core.
+Vision
 
-Reason:
+and
 
-Latency spikes
+Policy
 
-Queue contention
-
----
-
-### 25. OpenCL Architecture
-
-loadyuv.cl
-
-transform.cl
-
-Remain unchanged.
-
-OpenCL still performs preprocessing.
+on same core.
 
 ---
 
-## Section B — Performance Validation
+## 26. GPU Architecture
 
-### 26. Camera Performance Validation
+Mali-G610
+
+Responsibilities:
+
+UI Rendering
+
+Texture Rendering
+
+OpenGL
+
+Not:
+
+RKNN Inference
+
+---
+
+## 27. EGLImage Architecture
+
+DMA-BUF
+↓
+EGLImage
+↓
+GPU Texture
+
+Purpose:
+
+Zero-copy camera preview
+
+---
+
+## 28. Memory Architecture
+
+Track:
+
+Camera Buffers
+
+VisionIPC Buffers
+
+DMA-BUF Buffers
+
+GPU Textures
+
+RKNN Buffers
+
+Feature Buffers
+
+Hidden State Buffers
+
+---
+
+## 29. Buffer Reuse Policy
+
+Avoid:
+
+Per-frame allocation
+
+Prefer:
+
+Persistent buffers
+
+---
+
+## 30. Logging Policy
+
+Performance tests must record:
+
+CPU
+
+GPU
+
+NPU
+
+Memory
+
+Latency
+
+Temperature
+
+---
+
+# Section B — Validation Specification
+
+## 31. Camera Performance Validation
 
 Measure:
 
 Capture Latency
 
-ISP Latency
+Frame Rate
 
-Frame Delivery Latency
+Frame Drops
 
 Generate:
 
@@ -458,15 +549,15 @@ camera_performance.json
 
 ---
 
-### 27. VisionIPC Performance Validation
+## 32. VisionIPC Validation
 
 Measure:
 
+Transport Latency
+
 Queue Depth
 
-Dropped Frames
-
-Latency
+Drops
 
 Generate:
 
@@ -474,7 +565,23 @@ visionipc_performance.json
 
 ---
 
-### 28. OpenCL Validation
+## 33. DMA-BUF Validation
+
+Measure:
+
+Copy Reduction
+
+CPU Usage Reduction
+
+Latency Improvement
+
+Generate:
+
+dmabuf_performance.json
+
+---
+
+## 34. OpenCL Validation
 
 Measure:
 
@@ -486,93 +593,131 @@ Execution Time
 
 Generate:
 
-opencl_report.json
+opencl_performance.json
 
 ---
 
-### 29. Tensor Performance Validation
+## 35. Tensor Validation
 
 Measure:
 
 Tensor Preparation Time
 
-Buffer Reuse
-
 Allocation Count
 
+Buffer Reuse
+
 ---
 
-### 30. Vision Model Performance Validation
+## 36. Vision Performance Validation
 
 Measure:
 
-Vision Inference
-
-NPU Utilization
+Inference Time
 
 Queue Delay
 
----
+Core Utilization
 
-### 31. Vision Acceptance Targets
+Generate:
 
-Target:
-
-8–15 ms
-
-per frame
+vision_performance.json
 
 ---
 
-### 32. Policy Performance Validation
+## 37. Policy Performance Validation
 
 Measure:
 
-Policy Inference
-
-NPU Utilization
+Inference Time
 
 Queue Delay
 
----
+Core Utilization
 
-### 33. Policy Acceptance Targets
+Generate:
 
-Target:
-
-2–8 ms
-
-per frame
+policy_performance.json
 
 ---
 
-### 34. Combined Inference Validation
+## 38. Combined Inference Validation
 
-Vision
-+
-Policy
+Measure:
+
+Vision + Policy
 
 Target:
 
 <20 ms
 
-combined
-
 ---
 
-### 35. Tinygrad Baseline Validation
+## 39. Planner Validation
 
 Measure:
 
-Tinygrad Vision
+Planner Frequency
 
-Tinygrad Policy
+Planner Latency
 
-Use as regression baseline.
+Planner Jitter
+
+Generate:
+
+planner_performance.json
 
 ---
 
-### 36. Latency Validation
+## 40. UI Validation
+
+Measure:
+
+Render Time
+
+Display Latency
+
+Overlay Latency
+
+Generate:
+
+ui_performance.json
+
+---
+
+## 41. EGL Validation
+
+Measure:
+
+Import Time
+
+Texture Creation
+
+Render Time
+
+Generate:
+
+egl_performance.json
+
+---
+
+## 42. FPS Validation
+
+Record:
+
+Average FPS
+
+Minimum FPS
+
+Maximum FPS
+
+95%
+
+99%
+
+---
+
+## 43. Latency Validation
 
 Record:
 
@@ -580,125 +725,105 @@ Average
 
 Median
 
-95th Percentile
+95%
 
-99th Percentile
+99%
 
 Maximum
 
 ---
 
-### 37. FPS Validation
-
-Record:
-
-Average FPS
-
-Min FPS
-
-Max FPS
-
-95th Percentile FPS
-
-99th Percentile FPS
-
----
-
-### 38. Planner Timing Validation
-
-Validate:
-
-Planner Alive
-
-Planner Frequency
-
-Planner Jitter
-
-Planner Latency
-
----
-
-### 39. Publish Timing Validation
-
-Validate:
-
-modelV2 publish rate
-
-cameraOdometry publish rate
-
-No timing drift.
-
----
-
-## Section C — Thermal & Reliability Validation
-
-### 40. Thermal Philosophy
-
-Performance without thermal stability is invalid.
-
----
-
-### 41. Thermal Limits
-
-CPU
-
-<80°C
-
-NPU
-
-<85°C
-
-Board
-
-<75°C
-
----
-
-### 42. Thermal Validation
-
-30 Minutes Minimum
-
-1 Hour Preferred
-
-Generate:
-
-thermal_report.json
-
----
-
-### 43. Thermal Throttling Validation
-
-Record:
-
-Clock Reductions
-
-Frequency Changes
-
-Performance Drops
-
----
-
-### 44. Power Validation
+## 44. Copy Count Validation
 
 Measure:
 
-Voltage
+Camera Copies
 
-Current
+VisionIPC Copies
 
-Power Consumption
+UI Copies
 
-When available.
+Goal:
+
+Minimum Copies
 
 ---
 
-### 45. Long Duration Validation
+## 45. CPU Validation
 
-1 Hour Minimum
+Measure:
 
-4 Hours Preferred
+A76 Usage
 
-Validate:
+A55 Usage
+
+Migration
+
+Scheduler Behavior
+
+---
+
+## 46. GPU Validation
+
+Measure:
+
+GPU Utilization
+
+Texture Throughput
+
+UI Load
+
+---
+
+## 47. NPU Validation
+
+Measure:
+
+Core 0 Utilization
+
+Core 1 Utilization
+
+Core 2 Utilization
+
+---
+
+## 48. Memory Validation
+
+Measure:
+
+RSS
+
+Virtual Memory
+
+Allocation Count
+
+Leaks
+
+---
+
+## 49. Thermal Validation
+
+Measure:
+
+CPU Temperature
+
+GPU Temperature
+
+NPU Temperature
+
+---
+
+## 50. Long Duration Validation
+
+Minimum:
+
+1 Hour
+
+Preferred:
+
+4 Hours
+
+Record:
 
 Latency
 
@@ -710,35 +835,47 @@ FPS
 
 ---
 
-### 46. Memory Validation
+## 51. Recovery Validation
 
-RSS
-
-Virtual Memory
-
-Tensor Buffers
-
-Allocation Count
-
-No leaks permitted.
-
----
-
-### 47. Recovery Performance Validation
-
-Runtime Restart
+Measure:
 
 Camera Restart
 
+Runtime Restart
+
 Model Reload
 
-Measure recovery times.
+Recovery Time
 
 ---
 
-## Section D — AI Agent Operating Manual
+## 52. Acceptance Criteria
 
-### 48. Repository Discovery Workflow
+Camera PASS
+
+VisionIPC PASS
+
+OpenCL PASS
+
+RKNN PASS
+
+Planner PASS
+
+UI PASS
+
+Latency PASS
+
+Thermals PASS
+
+Memory PASS
+
+Recovery PASS
+
+---
+
+# Section C — AI Agent Operating Manual
+
+## 53. Discovery Workflow
 
 Discover:
 
@@ -746,135 +883,225 @@ Camera
 
 VisionIPC
 
-OpenCL
+DMA-BUF
 
-Modeld
+OpenCL
 
 RKNN
 
 Planner
 
+UI
+
 Generate:
 
-performance_analysis.json
+performance_inventory.json
 
 ---
 
-### 49. Fork Adaptation Rules
+## 54. Benchmark Workflow
+
+Discovery
+↓
+Camera
+↓
+VisionIPC
+↓
+DMA-BUF
+↓
+OpenCL
+↓
+Vision
+↓
+Policy
+↓
+Planner
+↓
+UI
+
+Generate Reports
+
+---
+
+## 55. Optimization Workflow
+
+Baseline
+↓
+Validate
+↓
+DMA-BUF
+↓
+Validate
+↓
+EGLImage
+↓
+Validate
+↓
+CPU Affinity
+↓
+Validate
+
+Never skip validation.
+
+---
+
+## 56. Fork Adaptation Rules
 
 Never assume:
 
-CPU Mapping
+CPU numbering
 
-Runtime Paths
+Runtime names
 
-Model Paths
+Model paths
 
-Environment Variables
+Environment variables
 
 Discover dynamically.
 
 ---
 
-### 50. Benchmark Workflow
-
-Discovery
-↓
-Camera Benchmark
-↓
-OpenCL Benchmark
-↓
-Vision Benchmark
-↓
-Policy Benchmark
-↓
-Planner Benchmark
-↓
-Thermal Benchmark
-↓
-Reliability Benchmark
-
----
-
-### 51. Optimization Workflow
-
-Correctness
-↓
-Stability
-↓
-Latency
-↓
-FPS
-
-Optimization in any other order is prohibited.
-
----
-
-### 52. Reporting Requirements
+## 57. Reporting Requirements
 
 Generate:
 
-timing_report.json
+camera_performance.json
 
-latency_report.json
+visionipc_performance.json
 
-throughput_report.json
+dmabuf_performance.json
 
-memory_report.json
+opencl_performance.json
+
+vision_performance.json
+
+policy_performance.json
+
+planner_performance.json
+
+ui_performance.json
 
 thermal_report.json
 
-npu_report.json
+latency_report.json
 
-performance_analysis.json
+performance_inventory.json
 
 ---
 
-### 53. Failure Modes
+## 58. Troubleshooting
 
-FPS Collapse
+Low FPS
+
+High Latency
 
 Thermal Throttling
+
+DMA-BUF Fallback
 
 NPU Contention
 
 CPU Migration
 
+Planner Jitter
+
+UI Lag
+
 Memory Leak
+
+Document root cause and fix.
+
+---
+
+## 59. Failure Modes
+
+Thermal Throttling
+
+Memory Leak
+
+NPU Contention
+
+DMA-BUF Failure
+
+GPU Import Failure
+
+Planner Starvation
 
 Queue Saturation
 
-Planner Jitter
-
-Publish Drift
+Latency Spike
 
 ---
 
-### 54. Optimization Boundaries
+## 60. Production Modes
 
-Allowed:
+Mode 1
 
-CPU Affinity
+Baseline
 
-NPU Assignment
+RKISP
+↓
+VisionIPC
+↓
+OpenCL
+↓
+RKNN
 
-Buffer Reuse
+Mode 2
 
-Scheduler Configuration
+DMA-BUF
 
-Validation Tools
+RKISP
+↓
+DMA-BUF
+↓
+VisionIPC
+↓
+RKNN
 
-Avoid:
+Mode 3
 
-Changing Planner Logic
+DMA-BUF + EGLImage
 
-Changing Controls Logic
+RKISP
+↓
+DMA-BUF
+├→ VisionIPC → RKNN
+└→ EGLImage → Mali GPU → UI
 
-Changing Metadata Semantics
+Recommended:
+
+Mode 3
 
 ---
 
-### 55. Production Readiness
+## 61. Expected Performance
+
+Mode 1
+
+Camera → modelV2
+
+18–30 ms
+
+Camera → UI
+
+30–45 ms
+
+Mode 2
+
+15–27 ms
+
+27–42 ms
+
+Mode 3
+
+15–27 ms
+
+20–35 ms
+
+---
+
+## 62. Production Readiness
 
 Required:
 
@@ -886,27 +1113,17 @@ Memory PASS
 
 Thermals PASS
 
+DMA-BUF PASS
+
+EGL PASS
+
 Planner PASS
 
 Recovery PASS
 
 ---
 
-### 56. Production Gate
-
-Deployment prohibited until:
-
-All performance sections PASS.
-
----
-
-### 57. Final Checklist
-
-CPU Affinity
-[ ]
-
-NPU Assignment
-[ ]
+## 63. Final Checklist
 
 Camera
 [ ]
@@ -914,13 +1131,22 @@ Camera
 VisionIPC
 [ ]
 
+DMA-BUF
+[ ]
+
 OpenCL
 [ ]
 
-Vision
+Vision RKNN
 [ ]
 
-Policy
+Policy RKNN
+[ ]
+
+Planner
+[ ]
+
+UI
 [ ]
 
 Latency
@@ -933,9 +1159,6 @@ Memory
 [ ]
 
 Thermals
-[ ]
-
-Planner
 [ ]
 
 Recovery
