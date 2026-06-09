@@ -1,812 +1,894 @@
-# VISIONIPC.MD
+# VISIONIPC.MD (Authoritative Version)
 
-# VisionIPC Reference for RK3588 / Orange Pi 5 OpenPilot Ports
+## Section A — Engineering Specification
 
-Version: 1.0
+### 1. Objective
 
-Purpose:
+Define VisionIPC architecture, ownership, transport, synchronization, DMA-BUF integration, EGLImage integration, replay integration, and AI-agent modification rules.
 
-Define how VisionIPC should be understood, preserved, validated, and debugged when porting openpilot-derived forks to:
-
-* RK3588
-* RK3588S
-* Orange Pi 5
-* Orange Pi 5 Plus
-* IMX415
-* RKISP
-* RKNN
-
-Target Repositories:
-
-* openpilot
-* sunnypilot
-* frogpilot
-* OPKR
-* KisaPilot
-* custom forks
-
----
-
-# 1. What VisionIPC Is
-
-VisionIPC is the shared-memory transport layer used to move camera frames between camera-producing processes and camera-consuming processes.
-
-In the openpilot pipeline, VisionIPC normally sits between:
-
-Camera Daemon
-
-and
-
-modeld / ui / other consumers
-
-It is not a neural network input format.
-
-It is not a camera driver.
-
-It is not the RKNN input tensor.
-
-It is a frame transport mechanism.
-
----
-
-# 2. VisionIPC Position in the Pipeline
-
-Recommended RK3588 pipeline:
+Target:
 
 IMX415
-
 ↓
-
-MIPI CSI-2
-
-↓
-
 RKISP
-
 ↓
-
-NV12 Frame
-
+NV12
 ↓
-
-Camera Daemon
-
-↓
-
 VisionIPC
-
 ↓
-
 modeld
 
+Target Production:
+
+IMX415
 ↓
-
-loadyuv.cl
-
+RKISP
 ↓
-
-transform.cl
-
+NV12 DMA-BUF
+├──────────────┬───────────────┐
+│              │               │
+▼              ▼               ▼
+VisionIPC    EGLImage       loggerd
+↓              ↓
+modeld      Mali GPU
+↓              ↓
+RKNN         UI
 ↓
-
-DrivingModelFrame.prepare()
-
-↓
-
-Model Input Tensor
-
-↓
-
-RKNN
-
-This means VisionIPC carries frames before model preprocessing.
+planner
 
 ---
 
-# 3. Critical Rule
+### 2. VisionIPC Philosophy
 
-Do not feed VisionIPC frames directly into RKNN.
+VisionIPC exists to transport frames.
 
-VisionIPC frames are usually:
+VisionIPC does not:
 
-* NV12
-* image-sized
-* camera-space
-* unwarped
+* run inference
+* create tensors
+* perform planning
+* control the vehicle
 
-RKNN driving models expect:
+VisionIPC must preserve:
 
-* model tensors
-* warped
-* resized
-* packed
-* temporally prepared
-* layout-specific
-
-Example:
-
-VisionIPC frame:
-
-1280x720 NV12
-
-Model tensor:
-
-1x12x128x256
-
-or
-
-1x128x256x12
-
-depending on layout.
+* frame integrity
+* timestamps
+* stream identity
+* buffer ownership
 
 ---
 
-# 4. VisionIPC Responsibilities
-
-VisionIPC is responsible for:
-
-* Frame transport
-* Shared memory ownership
-* Camera stream identification
-* Frame timestamps
-* Frame IDs
-* Synchronization between producers and consumers
-
-VisionIPC is not responsible for:
-
-* Image warping
-* Model tensor creation
-* RKNN inference
-* Path prediction
-* Planner behavior
-
----
-
-# 5. Common Vision Streams
-
-Common streams include:
-
-* roadCameraState
-* wideRoadCameraState
-* driverCameraState
-
-Common VisionIPC stream types include:
-
-* VISION_STREAM_ROAD
-* VISION_STREAM_WIDE_ROAD
-* VISION_STREAM_DRIVER
-
-For RK3588 IMX415 first-stage deployment, the required stream is:
-
-roadCameraState
-
-Only one road camera should be used until the single-camera path is validated.
-
----
-
-# 6. Single-Camera Policy
-
-For first RK3588 bring-up:
-
-Use:
-
-Road Camera only
-
-Disable or omit:
-
-* Wide Camera
-* Driver Camera
-
-Reason:
-
-Single-camera validation is simpler and prevents stream synchronization errors.
-
-After road camera validation passes, additional streams may be added.
-
----
-
-# 7. Frame Format Policy
-
-Preferred VisionIPC frame format:
-
-NV12
-
-Avoid:
-
-* BGR
-* RGB
-* MJPEG
-* YUYV
-
-in production paths.
-
-Debugging may use RGB/BGR screenshots, but not the runtime model path.
-
----
-
-# 8. Why NV12 Matters
-
-Openpilot preprocessing is built around NV12 frame handling.
-
-NV12 allows:
+### 3. VisionIPC Position in OpenPilot
 
 Camera
-
 ↓
+VisionIPC
+↓
+modeld
+↓
+modelV2
+↓
+planner
+
+UI Path:
 
 VisionIPC
-
 ↓
-
-OpenCL preprocessing
-
-without unnecessary RGB conversions.
-
-Wrong format handling causes:
-
-* color corruption
-* invalid tensors
-* broken overlays
-* unstable model outputs
+UI
+↓
+GPU
+↓
+Display
 
 ---
 
-# 9. Tight vs Padded NV12
+### 4. Stream Architecture
 
-VisionIPC may carry frames produced from different sources:
+Supported streams:
 
-* Qualcomm camera stack
-* USB webcam
-* RKISP
-* Replay
-* Custom camera daemon
+Road Camera
 
-Each source may have different memory layout.
+Wide Camera
 
-Do not assume the same NV12 layout across sources.
+Driver Camera
+
+Road camera is the primary bring-up target.
 
 ---
 
-# 10. Tight NV12
+### 5. VisionIPC Components
 
-Tight NV12 has:
+VisionIpcServer
 
-Y plane size:
+VisionIpcClient
 
-width × height
+VisionBuf
 
-UV plane size:
+VisionStreamType
 
-width × height / 2
+Frame Queues
 
-Total size:
+Synchronization
 
-width × height × 1.5
-
-Example:
-
-1280 × 720 × 1.5 = 1,382,400 bytes
+Buffer Management
 
 ---
 
-# 11. Padded NV12
-
-Padded NV12 may have:
-
-stride larger than width
-
-aligned height
-
-extra padding rows
-
-larger buffer size
-
-Common symptoms of wrong padded handling:
-
-* green/purple image
-* repeated lower image regions
-* distorted tensor reconstructions
-* modeld crashes after a few frames
-
----
-
-# 12. VisionIPC Frame Validation
-
-For each stream, record:
-
-* stream name
-* width
-* height
-* stride
-* pixel format
-* frame size
-* frame ID
-* timestamp
-* producer process
-* consumer process
-
-Generate:
-
-visionipc_report.json
-
----
-
-# 13. Timestamp Validation
-
-Every frame should have a valid timestamp.
-
-Record:
-
-Camera capture timestamp
-
-VisionIPC publish timestamp
-
-modeld receive timestamp
-
-Calculate:
-
-camera-to-modeld latency
-
-Large timestamp drift must be investigated.
-
----
-
-# 14. Frame ID Validation
-
-Frame IDs must:
-
-* increment monotonically
-* not repeat
-* not jump unexpectedly
-
-Frame ID problems indicate:
-
-* camera restart
-* dropped frames
-* synchronization failure
-
----
-
-# 15. Stream Discovery
-
-AI agents must discover available streams dynamically.
-
-Do not assume:
-
-road stream exists
-
-wide stream exists
-
-driver stream exists
-
-Search for:
-
-* VisionIpcClient
-* VisionIpcServer
-* VisionStreamType
-* roadCameraState
-* wideRoadCameraState
-* driverCameraState
-
-Generate:
-
-visionipc_stream_inventory.json
-
----
-
-# 16. Producer Discovery
-
-Find which process publishes frames.
-
-Common producers:
-
-* system/camerad
-* tools/webcam/camerad.py
-* custom camerad_rk
-* replay tools
-
-Record producer path.
-
----
-
-# 17. Consumer Discovery
-
-Find consumers:
-
-* modeld
-* ui
-* dmonitoringmodeld
-* loggerd
-* calibrationd
-
-Record which streams each consumer uses.
-
----
-
-# 18. RK3588 Recommended Producer
-
-For production RK3588 IMX415:
-
-Preferred producer:
-
-custom RK camera daemon
-
-or
-
-RKISP V4L2 camera daemon
-
-Acceptable for testing:
-
-tools/webcam/camerad.py
-
-Avoid for production:
-
-OpenCV BGR conversion path
-
-unless performance and correctness are validated.
-
----
-
-# 19. Webcam Compatibility
-
-When using webcam mode:
-
-Environment variables may include:
-
-USE_WEBCAM=1
-
-ROAD_CAM=0
-
-WEBCAM_WIDTH=1280
-
-WEBCAM_HEIGHT=720
-
-WEBCAM_FPS=20
-
-WEBCAM_FOCAL=910.0
-
-Webcam mode is useful for:
-
-* debugging
-* replay
-* bench testing
-
-It is not final IMX415 production mode.
-
----
-
-# 20. RKISP Compatibility
-
-For RKISP:
-
-Preferred output:
-
-NV12
-
-Validate:
-
-v4l2 pixel format
-
-bytesperline
-
-sizeimage
-
-frame interval
-
-Do not assume tight layout.
-
----
-
-# 21. VisionIPC and modeld
-
-modeld should consume VisionIPC frames and then call:
-
-DrivingModelFrame.prepare()
-
-or equivalent fork-specific preprocessing.
-
-The model input tensor must be created after VisionIPC.
-
----
-
-# 22. VisionIPC and UI
-
-UI may consume the same camera stream.
-
-UI correctness does not guarantee model correctness.
-
-A camera preview can look correct while model tensors are wrong.
-
-Always validate tensors separately.
-
----
-
-# 23. VisionIPC and Calibration
-
-Calibration depends on correct camera stream geometry.
-
-Wrong VisionIPC resolution or timestamps can cause:
-
-* calibration failure
-* unstable overlay
-* bad path alignment
-
----
-
-# 24. VisionIPC and Logger
-
-loggerd may record frames.
-
-Ensure logging does not starve:
-
-* modeld
-* camera daemon
-* UI
-
-Record logger impact during performance validation.
-
----
-
-# 25. VisionIPC Failure Modes
-
-Common failures:
-
-No frames
-
-Wrong stream name
-
-Wrong resolution
-
-Wrong pixel format
-
-Dropped frames
-
-Timestamp drift
-
-Buffer layout mismatch
-
-Consumer timeout
-
-Producer crash
-
----
-
-# 26. Debugging No Frames
-
-Check:
-
-* camera daemon alive
-* VisionIPC server created
-* stream name correct
-* modeld subscribed to correct stream
-* camera device opened
-
-Generate:
-
-no_frame_debug_report.md
-
----
-
-# 27. Debugging Wrong Colors
-
-Likely causes:
-
-* NV12 interpreted as RGB
-* UV offset wrong
-* padded NV12 read as tight NV12
-* wrong bytesperline
-
-Validate NV12 layout.
-
----
-
-# 28. Debugging Repeated Image Regions
-
-Likely causes:
-
-* wrong stride
-* wrong aligned height
-* wrong UV plane offset
-* wrong buffer size
-
-This is common when Qualcomm/VENUS assumptions are applied to RKISP/webcam frames.
-
----
-
-# 29. Debugging Overlay Misalignment
-
-VisionIPC may be correct while calibration is wrong.
-
-Check:
-
-* camera intrinsics
-* focal length
-* principal point
-* warp file
-* camera resolution
-
----
-
-# 30. Debugging modeld Crashes
-
-If modeld crashes after receiving frames:
-
-Check:
-
-* frame size
-* expected NV12 size
-* preprocessing buffer assumptions
-* reshape operations
-* metadata shape mismatch
-
----
-
-# 31. VisionIPC Validation Script
-
-Recommended tool:
-
-tools/rk3588/check_visionipc.py
+### 6. Producer Architecture
+
+Typical producer:
+
+RKISP
+↓
+V4L2
+↓
+VisionIpcServer
 
 Responsibilities:
 
-* connect to stream
-* read frames
-* print metadata
-* validate frame IDs
-* validate timestamps
-* validate dimensions
-* dump sample frame
+Capture
+
+Timestamp
+
+Publish
+
+Buffer Ownership
 
 ---
 
-# 32. Required Report
+### 7. Consumer Architecture
 
-Generate:
-
-visionipc_validation.json
-
-Include:
-
-stream name
-
-frame count
-
-drop count
-
-average latency
-
-max latency
-
-format
-
-resolution
-
-status
-
----
-
-# 33. Pass Criteria
-
-VisionIPC passes only if:
-
-* frames received
-* IDs monotonic
-* timestamps valid
-* dimensions correct
-* format expected
-* no corruption
-* modeld consumes stream successfully
-
----
-
-# 34. Fail Criteria
-
-Any of:
-
-* no frames
-* repeated IDs
-* invalid timestamps
-* wrong resolution
-* wrong format
-* frame corruption
-* modeld timeout
-
-results in FAIL.
-
----
-
-# 35. AI Agent Rules
-
-When modifying a fork:
-
-1. Discover VisionIPC streams
-2. Discover producers
-3. Discover consumers
-4. Validate frame format
-5. Validate dimensions
-6. Validate timestamps
-7. Validate modeld consumption
-8. Generate report
-
-Do not modify RKNN code until VisionIPC passes.
-
----
-
-# 36. Final Reference Pipeline
-
-Production RK3588 VisionIPC path:
-
-IMX415
-
-↓
-
-RKISP
-
-↓
-
-NV12
-
-↓
-
-VisionIPC
-
-↓
+Typical consumers:
 
 modeld
 
-↓
+ui
 
-OpenCL preprocessing
+loggerd
 
-↓
+calibrationd
 
-RKNN
+Responsibilities:
 
-This is the required reference pipeline.
+Subscribe
+
+Validate
+
+Consume
+
+Release
 
 ---
 
-# 37. VisionIPC Checklist
+### 8. Buffer Lifecycle
 
-Stream Inventory
+Capture
+↓
+Publish
+↓
+Consumer Access
+↓
+Release
+↓
+Reuse
 
-[ ] Complete
+Ownership must always be documented.
 
-Producer Found
+---
 
-[ ] PASS
+### 9. Memory Architecture
 
-Consumer Found
+Camera Memory
 
-[ ] PASS
+DMA-BUF Memory
 
-Frame Format
+VisionIPC Buffers
 
-[ ] PASS
+OpenCL Buffers
 
-Resolution
+GPU Texture Buffers
 
-[ ] PASS
+RKNN Buffers
 
-Timestamps
+Ownership transitions must be tracked.
 
-[ ] PASS
+---
+
+### 10. NV12 Architecture
+
+Supported:
+
+Tight NV12
+
+Padded NV12
+
+Never assume layout.
+
+Validate explicitly.
+
+---
+
+### 11. Timestamp Architecture
+
+Capture Timestamp
+
+Publish Timestamp
+
+Receive Timestamp
+
+Display Timestamp
+
+Planner Timestamp
+
+All timestamps must be monotonic.
+
+---
+
+### 12. Synchronization Architecture
 
 Frame IDs
 
-[ ] PASS
+Timestamps
 
-Modeld Consumption
+Buffer State
 
-[ ] PASS
+Producer/Consumer Coordination
 
-UI Preview
+---
 
-[ ] PASS
+### 13. DMA-BUF Architecture
 
-Overlay Validation
+RKISP
+↓
+DMA-BUF
+↓
+VisionIPC
 
-[ ] PASS
+Goal:
+
+Reduce copies
+
+Reduce CPU usage
+
+Reduce latency
+
+---
+
+### 14. DMA-BUF Ownership Rules
+
+Producer allocates
+
+Consumer imports
+
+Producer reuses only after release
+
+Never reuse active buffers.
+
+---
+
+### 15. EGLImage Architecture
+
+DMA-BUF
+↓
+EGLImage
+↓
+Mali GPU Texture
+↓
+OpenGL Rendering
+
+No CPU RGB conversion.
+
+---
+
+### 16. GPU Camera Preview Path
+
+Preferred:
+
+NV12 DMA-BUF
+↓
+EGLImage
+↓
+Mali Texture
+↓
+UI Overlay
+↓
+Display
+
+Avoid:
+
+NV12
+↓
+CPU RGB
+↓
+GPU Upload
+
+---
+
+### 17. Replay Architecture
+
+Recorded Route
+↓
+Replay
+↓
+VisionIPC
+↓
+modeld
+
+Replay must preserve:
+
+Timestamps
+
+Frame Ordering
+
+Metadata
+
+---
+
+### 18. Logger Integration
+
+loggerd may subscribe.
+
+loggerd must never block:
+
+camera
+
+VisionIPC
+
+modeld
+
+---
+
+### 19. Calibration Integration
+
+Calibration depends on:
+
+Timestamps
+
+Frame Integrity
+
+Camera Geometry
+
+VisionIPC failures can invalidate calibration.
+
+---
+
+### 20. Multi-Camera Architecture
+
+Road
+
+Wide
+
+Driver
+
+Synchronization rules required.
+
+---
+
+## Section B — Validation Specification
+
+### 21. Discovery Validation
+
+Discover:
+
+Streams
+
+Producers
+
+Consumers
+
+Buffer Types
+
+Generate:
+
+visionipc_analysis.json
+
+---
+
+### 22. Stream Validation
+
+Validate:
+
+Exists
+
+Alive
+
+Frames Arriving
+
+Correct Format
+
+---
+
+### 23. Frame Validation
+
+Validate:
+
+Width
+
+Height
+
+Stride
+
+Sizeimage
+
+Frame IDs
+
+Timestamps
+
+---
+
+### 24. NV12 Validation
+
+Validate:
+
+Plane Offsets
+
+Buffer Size
+
+Layout
+
+Generate:
+
+nv12_validation.json
+
+---
+
+### 25. Timestamp Validation
+
+Capture
+
+Publish
+
+Receive
+
+Display
+
+Monotonicity required.
+
+---
+
+### 26. Synchronization Validation
+
+Validate:
+
+Frame IDs
+
+Ordering
+
+No Missing Frames
+
+---
+
+### 27. DMA-BUF Validation
+
+Validate:
+
+FD Valid
+
+Import Success
+
+Lifetime Correct
+
+No Corruption
+
+Generate:
+
+dmabuf_validation.json
+
+---
+
+### 28. EGLImage Validation
+
+Validate:
+
+Import
+
+Texture Creation
+
+Color Accuracy
+
+Scaling
+
+Generate:
+
+egl_validation.json
+
+---
+
+### 29. UI Validation
+
+Validate:
+
+Camera Preview
+
+Path Overlay
+
+Lane Overlay
+
+No Artifacts
+
+---
+
+### 30. Replay Validation
+
+Replay Route
+
+Consume Frames
+
+Compare Outputs
+
+Generate:
+
+replay_validation.json
+
+---
+
+### 31. Logger Validation
+
+Validate:
+
+Logging Active
+
+No Frame Loss
+
+No Producer Blocking
+
+---
+
+### 32. Calibration Validation
+
+Validate:
+
+Stable Calibration
+
+No Timestamp Drift
+
+No Frame Corruption
+
+---
+
+### 33. Latency Validation
+
+Measure:
+
+Camera → VisionIPC
+
+VisionIPC → modeld
+
+VisionIPC → UI
+
+Camera → modelV2
+
+Camera → Display
+
+Generate:
+
+latency_report.json
+
+---
+
+### 34. Copy Count Validation
+
+Measure:
+
+Camera Copies
+
+VisionIPC Copies
+
+UI Copies
+
+Goal:
+
+Minimum Copies
+
+---
+
+### 35. Stress Validation
+
+30 Minutes
+
+1 Hour
+
+4 Hours
+
+Validate:
+
+Memory
+
+Latency
+
+Stability
+
+---
+
+### 36. Recovery Validation
+
+Camera Restart
+
+Process Restart
+
+Replay Restart
+
+DMA-BUF Reconnect
+
+---
+
+### 37. Acceptance Criteria
+
+Frames Valid
+
+Timestamps Valid
+
+DMA-BUF Stable
+
+Replay Stable
+
+UI Stable
+
+Modeld Stable
+
+PASS
+
+---
+
+## Section C — AI Agent Operating Manual
+
+### 38. Repository Discovery Workflow
+
+Discover:
+
+VisionIpcServer
+
+VisionIpcClient
+
+VisionBuf
+
+Streams
+
+Consumers
+
+Replay
+
+DMA-BUF Support
+
+EGL Support
+
+Generate:
+
+visionipc_inventory.json
+
+---
+
+### 39. Fork Adaptation Rules
+
+Never assume:
+
+Paths
+
+Stream Names
+
+Enums
+
+Consumer Names
+
+Discover dynamically.
+
+---
+
+### 40. Patch Strategy
+
+Allowed:
+
+VisionIPC
+
+DMA-BUF Export
+
+DMA-BUF Import
+
+UI EGL Path
+
+Validation Hooks
+
+Avoid:
+
+Planner
+
+Controls
+
+Vehicle Interface
+
+---
+
+### 41. DMA-BUF Upgrade Workflow
+
+Baseline
+↓
+Validate
+↓
+DMA-BUF
+↓
+Validate
+↓
+EGLImage
+↓
+Validate
+
+Never skip steps.
+
+---
+
+### 42. Reporting Requirements
+
+Generate:
+
+visionipc_analysis.json
+
+visionipc_validation.json
+
+dmabuf_validation.json
+
+egl_validation.json
+
+latency_report.json
+
+copy_count_report.json
+
+---
+
+### 43. Troubleshooting
+
+Green Preview
+
+Purple Preview
+
+Frame Corruption
+
+Stale DMA-BUF
+
+Dropped Frames
+
+Timestamp Drift
+
+EGL Import Failure
+
+Overlay Lag
+
+Replay Desync
+
+Document root causes and fixes.
+
+---
+
+### 44. Failure Modes
+
+Wrong Format
+
+Wrong Stride
+
+Wrong Buffer Size
+
+Invalid Timestamp
+
+DMA-BUF Reuse
+
+GPU Import Failure
+
+Replay Failure
+
+Frame Starvation
+
+---
+
+### 45. Production Deployment Modes
+
+Mode 1
+
+RKISP
+↓
+VisionIPC
+↓
+OpenCL
+↓
+RKNN
+
+Mode 2
+
+RKISP
+↓
+DMA-BUF
+↓
+VisionIPC
+↓
+OpenCL
+↓
+RKNN
+
+Mode 3
+
+RKISP
+↓
+DMA-BUF
+├→ VisionIPC → RKNN
+└→ EGLImage → Mali GPU → UI
+
+Recommended:
+
+Mode 3
+
+---
+
+### 46. Performance Targets
+
+Mode 1
+
+Camera → modelV2
+
+18–30 ms
+
+Mode 2
+
+15–27 ms
+
+Mode 3
+
+15–27 ms
+
+Camera → UI
+
+20–35 ms
+
+---
+
+### 47. Production Readiness
+
+Required:
+
+VisionIPC PASS
+
+Replay PASS
+
+DMA-BUF PASS
+
+EGL PASS
+
+Latency PASS
+
+Stress PASS
+
+Recovery PASS
+
+---
+
+### 48. Final Checklist
+
+Streams
+[ ]
+
+NV12
+[ ]
+
+Timestamps
+[ ]
+
+Replay
+[ ]
+
+DMA-BUF
+[ ]
+
+EGLImage
+[ ]
+
+UI
+[ ]
+
+Latency
+[ ]
+
+Stress
+[ ]
+
+Recovery
+[ ]
 
 Result:
 
