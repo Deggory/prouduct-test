@@ -1,9 +1,9 @@
 # BRAIN.MD — The Omniscient RK3588 OpenPilot Brain
 
-**Version:** 10.4 — Final Repo-Ready Master Reference  
+**Version:** 10.5 — Final Repo-Ready Master Reference, Kernel-Speed Complete  
 **Classification:** Single Source of Truth  
 **Target:** Orange Pi 5 / RK3588 / Sony IMX415 single road camera  
-**Mission:** Map the complete neural, physical, and software architecture of Sunnypilot/OpenPilot on RK3588. This document defines the C++ RKNN runner architecture, strict sysfs frequency locking, V4L2 plane auto-detection, VisionIPC-safe camera bring-up, RKNN validation, and exact file-by-file patching instructions for any fork.
+**Mission:** Map the complete neural, physical, and software architecture of Sunnypilot/OpenPilot on RK3588. This document defines the C++ RKNN runner architecture, strict sysfs frequency locking, V4L2 plane auto-detection, VisionIPC-safe camera bring-up, RKNN validation, kernel speed/realtime checks, and exact file-by-file patching instructions for any fork.
 
 ---
 
@@ -1193,7 +1193,237 @@ Do not change model/planner logic for UI issues.
 
 ---
 
-# SECTION 7 — VALIDATION AND DEPLOYMENT PROTOCOLS
+# SECTION 7 — KERNEL SPEED AND REALTIME PERFORMANCE
+
+Kernel speed is not only model latency. The RK3588 port must verify Linux scheduling, CPU frequency, NPU frequency, DMC/DDR frequency, camera FPS, IRQ behavior, DMA memory, and thermal throttling.
+
+Do not tune blindly. First measure, then lock, then verify under load.
+
+## 7.1 CPU governor lock
+
+For production, set all CPU cores to performance mode from a root boot script or systemd service:
+
+```bash
+for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+  echo performance | sudo tee "$cpu"
+done
+```
+
+Verify:
+
+```bash
+cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq
+```
+
+RK3588 CPU map:
+
+```text
+CPU 0-3 → Cortex-A55 little cores
+CPU 4-7 → Cortex-A76 big cores
+```
+
+Recommended runtime placement:
+
+```text
+camerad / v4l2d → CPU 6
+modeld           → CPU 4-7
+ui               → CPU 0-3 or normal scheduler
+```
+
+Do not put camera IRQs, modeld, and UI rendering all on the same core.
+
+## 7.2 NPU and DMC frequency verification
+
+Locking is not enough. Runtime must verify frequencies stay locked during camera and model load.
+
+Check:
+
+```bash
+cat /sys/class/devfreq/*npu*/cur_freq
+cat /sys/class/devfreq/*dmc*/cur_freq
+cat /sys/kernel/debug/rknpu/load
+```
+
+Expected target values:
+
+```text
+NPU cur_freq ≈ 1000000000
+DMC cur_freq ≈ 2112000000
+```
+
+If values drop during inference, check:
+
+```text
+thermal throttling
+governor override
+missing boot service
+wrong devfreq path
+insufficient power supply
+```
+
+## 7.3 Camera kernel FPS validation
+
+Before launching OpenPilot, test the kernel camera path directly:
+
+```bash
+v4l2-ctl -d /dev/video11 \
+  --stream-mmap \
+  --stream-count=600 \
+  --stream-poll
+```
+
+Expected:
+
+```text
+20 FPS target → no drops
+60 FPS sensor test → stable only if selected mode supports it
+```
+
+Also verify active format and frame interval:
+
+```bash
+v4l2-ctl -d /dev/video11 --get-fmt-video
+v4l2-ctl -d /dev/video11 --get-parm
+v4l2-ctl -d /dev/video11 --list-formats-ext
+```
+
+Do not assume `1920x1080@60` is the runtime model mode. For OpenPilot road model bring-up, prefer a validated `1280x720@20` path unless the repo expects another model input path.
+
+## 7.4 IRQ and kernel-thread check
+
+Find camera, CSI, ISP, RGA, and NPU interrupt activity:
+
+```bash
+cat /proc/interrupts | grep -Ei "isp|cif|rga|rknpu|npu|mipi|csi|dphy"
+```
+
+During camera/model run, interrupt counts should increase smoothly.
+
+Optional advanced tuning:
+
+```text
+Pin heavy camera/ISP/NPU IRQs away from UI cores.
+Avoid placing all IRQs on the same A76 core used by modeld.
+Only tune IRQ affinity after baseline latency logs prove IRQ contention.
+```
+
+Do not start with kernel boot isolation options such as `isolcpus`, `nohz_full`, or PREEMPT_RT. Those are later experiments after the userspace pipeline is correct.
+
+## 7.5 DMA/CMA memory and IOMMU checks
+
+DMA-BUF, RGA, RKISP, and RKNN may fail or jitter if contiguous/dma-heap memory is unstable.
+
+Check kernel logs:
+
+```bash
+dmesg | grep -Ei "cma|dma|dma_heap|ion|iommu|rga|rkisp|rkcif|rknpu|npu"
+```
+
+Check memory/dma heap availability:
+
+```bash
+cat /proc/meminfo | grep -i cma || true
+ls -l /dev/dma_heap 2>/dev/null || true
+ls -l /dev/ion 2>/dev/null || true
+```
+
+Rules:
+
+```text
+No DMA allocation errors in dmesg.
+No repeated IOMMU faults.
+No RGA import/export errors.
+No RKNN memory allocation failures.
+No VisionIPC buffer allocation failures.
+```
+
+If DMA-BUF zero-copy is unstable, fall back to the copy-first VisionIPC path and validate correctness before optimizing again.
+
+## 7.6 Realtime permissions and systemd limits
+
+`SCHED_FIFO`, CPU affinity, and frequency locking may require root or capabilities.
+
+For a systemd-launched manager, use limits similar to:
+
+```ini
+[Service]
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=50
+```
+
+If not using systemd scheduling directly, make sure the process has permission for:
+
+```text
+CAP_SYS_NICE
+realtime priority
+CPU affinity setting
+memlock if using locked DMA/model buffers
+```
+
+Failure symptom:
+
+```text
+code requests SCHED_FIFO but silently runs normal scheduler
+latency spikes appear even though model inference is fast
+```
+
+## 7.7 Thermal throttling check
+
+Monitor temperature and frequencies together:
+
+```bash
+watch -n 1 'cat /sys/class/thermal/thermal_zone*/temp; echo NPU; cat /sys/class/devfreq/*npu*/cur_freq; echo DMC; cat /sys/class/devfreq/*dmc*/cur_freq'
+```
+
+Rules:
+
+```text
+Below 65°C → normal
+65–75°C    → increase fan
+75–85°C    → warning, possible throttling
+85°C+      → unsafe for stable latency
+```
+
+If thermal throttling starts, do not tune model code first. Fix cooling, fan PWM, case airflow, and power supply stability.
+
+## 7.8 Latency spike diagnosis
+
+Every 100 frames, log:
+
+```text
+camera dqbuf ms
+VisionIPC send ms
+modeld receive wait ms
+DrivingModelFrame.prepare ms
+RKNN vision ms
+RKNN policy ms
+modelV2 publish ms
+total camera → modelV2 ms
+NPU cur_freq
+DMC cur_freq
+CPU cur_freq
+temperature
+camera frame drops
+```
+
+If latency spikes happen, check in this order:
+
+```text
+DMC frequency drop
+NPU frequency drop
+CPU governor not performance
+thermal throttling
+camera frame drops
+IRQ overload
+DMA/IOMMU allocation errors
+OpenCV/BGR path accidentally active
+UI stealing big cores
+```
+
+# SECTION 8 — VALIDATION AND DEPLOYMENT PROTOCOLS
 
 ## 7.1 Hardware validation commands
 
@@ -1326,7 +1556,7 @@ low-speed closed/private area
 
 ---
 
-# SECTION 8 — ARCHITECTURAL FLOW DIAGRAM
+# SECTION 9 — ARCHITECTURAL FLOW DIAGRAM
 
 ```text
 [IMX415 Sensor]
@@ -1364,7 +1594,7 @@ low-speed closed/private area
 
 ---
 
-# SECTION 9 — STEP-BY-STEP PORTING ORDER
+# SECTION 10 — STEP-BY-STEP PORTING ORDER
 
 Do not ask an AI agent to port everything at once.
 
@@ -1391,7 +1621,7 @@ Use this order:
 
 ---
 
-# SECTION 10 — VS CODE / AI AGENT PROMPT
+# SECTION 11 — VS CODE / AI AGENT PROMPT
 
 Paste this into VS Code AI/Claude Code/Copilot when starting the port:
 
@@ -1445,6 +1675,7 @@ The plan must include:
 10. risks
 11. exact milestone order
 12. test commands for each milestone
+13. kernel speed, IRQ, frequency, and thermal verification commands
 
 Do not edit source code until the plan is approved.
 ```
@@ -1464,12 +1695,13 @@ Any AI agent or engineer must:
 4. Keep planner/control/schema untouched.
 5. Use strict RKNN core assignment.
 6. Use C++ RKNN runner for production.
-7. Lock NPU and DMC frequencies.
+7. Lock and verify CPU, NPU, and DMC frequencies.
 8. Validate against ONNX/Tinygrad.
 9. Publish modelV2 only after finite output validation.
 10. Preserve fallback paths.
 11. Replace PyAV/OpenCV only after baseline modeld is correct.
 12. Add true zero-copy only after copy-path correctness is proven.
+13. Verify kernel speed, IRQ behavior, DMA memory, and thermal stability under load.
 ```
 
 **Do not deviate from this architecture.**
