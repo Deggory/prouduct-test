@@ -1,4 +1,3 @@
-```markdown
 # RK3588_PORT_PLAN.md
 
 **Status:** Pending Approval
@@ -86,21 +85,3 @@ v4l2-ctl -d /dev/video11 --stream-mmap --stream-count=100 --stream-to=/tmp/imx41
 
 # 4. Test OpenPilot boot (no model)
 NOBOARD=1 NOSENSOR=1 FORCE_IGNITION_ON=1 USE_WEBCAM=1 ROAD_CAM=11 NO_DM=1 NO_IMU=1 ./launch_openpilot.sh
-```
-
-After modeld integration, verify NPU load and outputs:
-```bash
-# Monitor NPU load during inference
-watch -n 1 cat /sys/kernel/debug/rknpu/load
-
-# Run with RKNN backend
-NOBOARD=1 NOSENSOR=1 FORCE_IGNITION_ON=1 USE_WEBCAM=1 ROAD_CAM=11 NO_DM=1 NO_IMU=1 \
-OPENPILOT_MODELD_BACKEND=rknn ./launch_openpilot.sh
-```
-
-## 6. Safety & Forbidden Rules (Enforced)
-- **Never** modify `cereal/log.capnp`, `plannerd.py`, `controlsd.py`, `loadyuv.cl`, or `transform.cl`.
-- **Never** use `RKNN_NPU_CORE_ALL` or `NPU_CORE_AUTO`.
-- **Never** hardcode `outputs[0]`. Use `.pkl` metadata slices.
-- **Never** test steering on the road until 1-hour passive stability is verified.
-```
