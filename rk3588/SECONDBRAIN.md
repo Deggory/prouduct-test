@@ -1,3 +1,40 @@
+@workspace Read the BRAIN.md file at the root of this repository. 
+
+This document is the absolute single source of truth for porting this OpenPilot fork to the Orange Pi 5 (RK3588). You must obey the PRIME DIRECTIVE and the FORBIDDEN rules defined in BRAIN.md at all times. 
+
+Do you understand the 7-Milestone Roadmap, the File-by-File Patch Map in Section 1, and the strict rules about metadata-driven execution and NPU core assignment? 
+
+Reply with "BRAIN.md loaded and understood. Ready to execute porting tasks." Do not write any code yet.
+
+
+Prompt 1: Hardware Abstraction & Bootstrapping (Milestone 1)
+Using BRAIN.md Section 1.1 and 1.2 as the strict blueprint, let's begin Milestone 1. 
+1. Patch `system/hardware/__init__.py` to inject RK3588 device tree detection.
+2. Create the `common/hardware/rk3588/hardware.py` file with the RK3588Hardware class. Remember the CRITICAL rule: get_device_type() MUST return "pc". Include the sysfs thermal and frequency management paths from Section 2.2.
+3. Patch `system/manager/process_config.py` to gate camerad and dmonitoringmodeld based on the USE_WEBCAM and NO_DM env vars.
+Show me the exact code diffs for these files.
+
+
+Prompt 2: Camera & Intrinsics (Milestone 2 & 3)
+Using BRAIN.md Section 1.3 and Section 3, let's fix the camera pipeline and intrinsics.
+1. Patch `common/transformations/camera.py` to override DEVICE_CAMERAS[("pc", "unknown")] with the IMX415 intrinsics (1280x720, focal=900.0).
+2. Patch the webcam camera file (`tools/webcam/camera.py` or similar) to add the `get_modeld_nv12_info()` function so it returns tight NV12 layout (1,382,400 bytes) to prevent the UV plane corruption bug.
+Show me the exact code diffs.
+Prompt 3: RKNN Inference Wiring (Milestone 6)
+Use this prompt if you already have the .rknn models in selfdrive/modeld/models/.
+
+Using BRAIN.md Section 1.4 and Section 5, let's wire the RKNN NPU backend into modeld.
+1. Locate the model runner file (e.g., `sunnypilot/modeld_v2/model_runner.py` or `selfdrive/modeld/modeld.py`).
+2. Create the `RKNNRunner` class exactly as described in Section 5.1. Enforce strict core assignment (0 for Vision, 1 for Policy). Include the np.isfinite() fail-fast validation.
+3. Patch the modeld initialization logic to read the `OPENPILOT_MODELD_BACKEND` env var. If it equals "rknn", initialize the RKNNRunner. Otherwise, fall back to ONNX/Tinygrad.
+4. Ensure outputs are sliced using the metadata .pkl files, NOT hardcoded indices.
+Show me the exact code diffs.
+
+
+
+
+
+
 # SECONDBRAIN.md — RK3588 / Orange Pi 5 / IMX415 OpenPilot Porting Brain
 
 **Version:** 1.0  
